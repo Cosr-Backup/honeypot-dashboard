@@ -143,6 +143,19 @@ class TestNicknames:
         nick2 = generate.generate_nickname('1.2.3.4', mock_geo_cache['1.2.3.4'])
         assert nick1 == nick2
 
+    def test_nickname_format_and_stable_across_reset(self, mock_geo_cache):
+        """adjective_noun shape, and stable across a full cache reset — md5-seeded,
+        not salted builtin hash(), so names don't reshuffle every regeneration."""
+        generate._nickname_cache.clear()
+        generate._nickname_counter.clear()
+        n1 = generate.generate_nickname('1.2.3.4', mock_geo_cache['1.2.3.4'])
+        assert '_' in n1
+        assert n1.split('_')[0] in generate.NICKNAME_ADJECTIVES
+        generate._nickname_cache.clear()
+        generate._nickname_counter.clear()
+        n2 = generate.generate_nickname('1.2.3.4', mock_geo_cache['1.2.3.4'])
+        assert n1 == n2
+
 
 class TestEmptyCommandRegression:
     """Regression for the production crash `[FATAL] list index out of range`.

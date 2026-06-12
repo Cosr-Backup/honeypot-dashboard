@@ -356,6 +356,11 @@ CACHE_PATH = os.path.join(DATA_DIR, "geoip_cache.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "dashboard.html")
 CACHE_FILE = os.path.join(DATA_DIR, "description_cache.json")
 
+# Max attacker IPs plotted on the map. The map filters per-week client-side, so
+# this only bounds page size; set well above the ~5–6k unique IPs in a 60-day
+# window so recent weeks (newer, lower-volume IPs) aren't dropped off the map.
+MAX_MAP_MARKERS = int(os.environ.get("MAX_MAP_MARKERS", "10000"))
+
 
 def atomic_json_write(filepath, data, indent=2):
     """Write JSON atomically using temp file + os.rename (H3 fix)."""
@@ -614,8 +619,45 @@ COUNTRY_FLAVORS = {
     "AU": ["kiwi", "outback", "roo", "barbie", "reef"],
     "CA": ["maple", "moose", "poutine", "hockey", "toque"],
     "SE": ["viking", "fjord", "meatball", "abba", "fika"],
+    "VN": ["pho", "lotus", "mekong", "bamboo", "dragonfruit"],
+    "ID": ["komodo", "batik", "rendang", "volcano", "garuda"],
+    "TR": ["sultan", "bazaar", "kebab", "bosphorus", "anatolia"],
+    "IR": ["saffron", "persia", "cyrus", "rosewater", "pistachio"],
+    "UA": ["cossack", "sunflower", "steppe", "trident", "varenyk"],
+    "PL": ["pierogi", "bison", "amber", "falcon", "zubr"],
+    "RO": ["dracula", "carpath", "mamaliga", "danube", "lynx"],
+    "ES": ["flamenco", "siesta", "paella", "matador", "rioja"],
+    "IT": ["pasta", "vespa", "espresso", "gondola", "ciao"],
+    "MX": ["taco", "lucha", "agave", "cactus", "mariachi"],
+    "AR": ["tango", "pampas", "gaucho", "mate", "asado"],
+    "ZA": ["springbok", "savanna", "braai", "kudu", "rooibos"],
+    "EG": ["sphinx", "nile", "pharaoh", "scarab", "papyrus"],
+    "SG": ["merlion", "orchid", "kopi", "durian", "hawker"],
+    "TH": ["padthai", "elephant", "muay", "mango", "tuktuk"],
+    "PH": ["jeepney", "adobo", "tarsier", "bayan", "halohalo"],
+    "TW": ["boba", "taipei", "oolong", "ximen", "betel"],
+    "HK": ["dimsum", "harbor", "junk", "neon", "peak"],
+    "AE": ["dune", "falcon", "oasis", "souk", "dhow"],
+    "SA": ["oryx", "date", "oasis", "najd", "frankincense"],
+    "NG": ["jollof", "afrobeat", "naija", "delta", "nok"],
+    "PK": ["indus", "markhor", "minar", "truck", "chinar"],
+    "BD": ["delta", "jute", "rickshaw", "ilish", "sundarban"],
+    "VE": ["arepa", "orinoco", "angel", "llanero", "harpy"],
 }
-DEFAULT_FLAVORS = ["ghost", "shadow", "phantom", "specter", "wraith", "cipher", "rogue"]
+DEFAULT_FLAVORS = ["ghost", "shadow", "phantom", "specter", "wraith", "cipher",
+                   "rogue", "nomad", "drifter", "void", "echo", "static", "husk"]
+
+# Adjective pool — paired with a country-flavored noun so nicknames draw from a
+# large, characterful namespace (far fewer collisions than the old single word).
+NICKNAME_ADJECTIVES = [
+    "rusty", "silent", "feral", "grumpy", "sneaky", "brazen", "weary", "manic",
+    "stoic", "jittery", "crimson", "obsidian", "vapor", "glitchy", "midnight",
+    "rabid", "listless", "clandestine", "baroque", "derelict", "frantic", "sullen",
+    "arctic", "molten", "spectral", "unhinged", "velvet", "ashen", "wired", "rogue",
+    "cryptic", "drowsy", "savage", "placid", "gnarled", "hollow", "brisk", "murky",
+    "zealous", "aloof", "lurking", "restless", "venomous", "wily", "scrappy",
+    "ironclad", "nocturnal", "haywire",
+]
 
 BORING_CREDS = {
     "root:root", "admin:admin", "admin:password", "admin:123456", "root:123456",
@@ -630,36 +672,54 @@ BORING_CREDS = {
 _nickname_cache = {}
 _nickname_counter = Counter()
 
+def _ip_hash(ip):
+    """Stable per-IP hash. Uses md5 rather than the builtin hash() (which is
+    salted per process), so an attacker keeps the same nickname across runs."""
+    return int(hashlib.md5(ip.encode("utf-8")).hexdigest(), 16)
+
+
+def _behavior_suffix(creds_tried):
+    """Behavioral tag derived from the credentials an IP tried."""
+    if not creds_tried:
+        return ""
+    cred_str = " ".join(creds_tried[:100]).lower()
+    if any(w in cred_str for w in ["solana", "sol", "validator", "raydium", "firedancer"]):
+        return "_sol"
+    if any(w in cred_str for w in ["root", "admin", "ubuntu"]):
+        return "_root"
+    if any(w in cred_str for w in ["postgres", "mysql", "oracle", "mongo"]):
+        return "_db"
+    if any(w in cred_str for w in ["pi", "raspberry"]):
+        return "_pi"
+    if any(w in cred_str for w in ["miner", "eth", "bitcoin"]):
+        return "_crypto"
+    return ""
+
+
 def generate_nickname(ip, geo, creds_tried=None):
-    """Generate a cute nickname for an IP based on country and behavior."""
+    """Deterministic, characterful nickname: <adjective>_<country-noun>[_behavior]
+    (e.g. 'sullen_tulip_sol'). Seeded from a stable hash of the IP, so the same
+    attacker always renders the same name."""
     if ip in _nickname_cache:
         return _nickname_cache[ip]
-    
+
     cc = geo.get("countryCode", "").upper()
-    flavors = COUNTRY_FLAVORS.get(cc, DEFAULT_FLAVORS)
-    flavor = flavors[hash(ip) % len(flavors)]
-    
-    suffix = ""
-    if creds_tried:
-        cred_str = " ".join(creds_tried).lower()
-        if any(w in cred_str for w in ["solana", "sol", "validator", "raydium", "firedancer"]):
-            suffix = "_sol"
-        elif any(w in cred_str for w in ["root", "admin", "ubuntu"]):
-            suffix = "_root"
-        elif any(w in cred_str for w in ["postgres", "mysql", "oracle", "mongo"]):
-            suffix = "_db"
-        elif any(w in cred_str for w in ["pi", "raspberry"]):
-            suffix = "_pi"
-        elif any(w in cred_str for w in ["miner", "eth", "bitcoin"]):
-            suffix = "_crypto"
-    
-    base = f"{flavor}{suffix}"
+    nouns = COUNTRY_FLAVORS.get(cc, DEFAULT_FLAVORS)
+    h = _ip_hash(ip)
+    adj = NICKNAME_ADJECTIVES[(h >> 16) % len(NICKNAME_ADJECTIVES)]
+    noun = nouns[h % len(nouns)]
+    base = f"{adj}_{noun}{_behavior_suffix(creds_tried)}"
+
+    # Deterministic collision handling: a second, distinct IP that lands on the
+    # same base gets a stable discriminator from its own address (final IPv4
+    # octet / IPv6 segment), never an order-dependent counter.
     _nickname_counter[base] += 1
     if _nickname_counter[base] > 1:
-        nickname = f"{base}_{_nickname_counter[base]}"
+        tail = ip.split(":")[-1].split(".")[-1] or str(h % 1000)
+        nickname = f"{base}_{tail}"
     else:
         nickname = base
-    
+
     _nickname_cache[ip] = nickname
     return nickname
 
@@ -875,7 +935,11 @@ def analyze_events(events, geo_cache):
 
     markers = []
     seen_ips = set()
-    for ip, count in ip_attempts.most_common(500):
+    # Plot every geolocated attacker, not just the top-500 by total attempts.
+    # That old cap biased the map toward long-lived high-volume IPs, so recent
+    # weeks — dominated by newer, lower-volume attackers — rendered sparse or
+    # empty. MAX_MAP_MARKERS is just a generous safety bound on page size.
+    for ip, count in ip_attempts.most_common(MAX_MAP_MARKERS):
         if ip in seen_ips:
             continue
         seen_ips.add(ip)
@@ -2344,8 +2408,10 @@ def generate_html(data):
   var allTimelineData = {timeline_data};
   var allDailyBreakdown = {daily_breakdown_json};
 
-  // Weekly pagination state
-  var weekOffset = 0; // 0 = current week, -1 = last week, etc.
+  // Weekly pagination state. Persisted across the page's auto-refresh so you
+  // aren't yanked back to the current week while browsing older data.
+  var weekOffset = parseInt(localStorage.getItem('hpd_weekOffset'), 10);
+  if (isNaN(weekOffset) || weekOffset > 0) weekOffset = 0;
 
   function getWeekRange(offset) {{
     var now = new Date();
@@ -2521,10 +2587,18 @@ def generate_html(data):
     if (newOffset < minOff) newOffset = minOff;
     if (newOffset !== weekOffset) {{
       weekOffset = newOffset;
+      localStorage.setItem('hpd_weekOffset', weekOffset);
       updateWeekDisplay();
     }}
   }};
 
+  // A restored offset may now be out of range (the data window can shrink) —
+  // clamp it to what's available before the first render.
+  (function() {{
+    var minOff = getMinWeekOffset();
+    if (weekOffset < minOff) weekOffset = minOff;
+    if (weekOffset > 0) weekOffset = 0;
+  }})();
   // Render markers for current week (updateWeekDisplay handles filtering)
   updateWeekDisplay();
 
