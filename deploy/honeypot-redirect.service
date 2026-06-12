@@ -1,0 +1,16 @@
+[Unit]
+Description=Redirect inbound TCP/22 to the Cowrie honeypot on 2223
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Idempotent (-C check before -A) so re-runs and manual starts are safe.
+# Ordered After=docker.service because the Docker daemon rebuilds the nat table
+# on start and would otherwise drop a manually-added PREROUTING rule — which is
+# how this redirect kept disappearing across reboots/daemon restarts.
+ExecStart=/bin/sh -c 'iptables -t nat -C PREROUTING -p tcp --dport 22 -j REDIRECT --to-ports 2223 2>/dev/null || iptables -t nat -A PREROUTING -p tcp --dport 22 -j REDIRECT --to-ports 2223'
+
+[Install]
+WantedBy=multi-user.target

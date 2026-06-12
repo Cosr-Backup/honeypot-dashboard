@@ -144,6 +144,12 @@ sudo -u cowrie ./cowrie-env/bin/pip install -r requirements.txt
 sudo iptables -t nat -A PREROUTING -p tcp --dport 22 -j REDIRECT --to-port 2223
 
 # Move your real SSH to a non-standard port first!
+
+# A raw iptables rule does NOT survive a reboot (and the Docker daemon rebuilds
+# the nat table on start and can drop it). Install the bundled unit to re-apply
+# the redirect on every boot, ordered after Docker:
+sudo cp deploy/honeypot-redirect.service /etc/systemd/system/
+sudo systemctl enable --now honeypot-redirect.service
 ```
 
 ### 2. Install the Dashboard
