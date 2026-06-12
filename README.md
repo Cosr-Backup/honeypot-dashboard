@@ -283,6 +283,44 @@ All set in `docker-compose.yml`; the same variables work for a bare-metal run.
 | `REGEN_INTERVAL` | `300` | Seconds between dashboard/analytics regenerations |
 | `SERVE_REGEN_ON_START` | `1` | Whether `serve.py` regenerates on startup (the scheduler sets `0`) |
 
+The container runs as **non-root** (uid 10001) and joins the host's `cowrie`
+group for log reads. Because of that, the bind-mounted `./data` must be writable
+by that uid — one-time on the host:
+
+```bash
+sudo chown -R 10001:10001 data
+```
+
+### Keeping it running (`deploy/`)
+
+- **`honeypot-redirect.service`** + **`docker-honeypot-redirect.conf`** — keep the
+  port-22 → Cowrie(2223) iptables redirect in place across reboots *and* Docker
+  daemon restarts (Docker rebuilds the nat table on start and can drop the rule):
+
+  ```bash
+  sudo cp deploy/honeypot-redirect.service /etc/systemd/system/
+  sudo systemctl enable --now honeypot-redirect.service
+  sudo mkdir -p /etc/systemd/system/docker.service.d
+  sudo cp deploy/docker-honeypot-redirect.conf /etc/systemd/system/docker.service.d/honeypot-redirect.conf
+  sudo systemctl daemon-reload
+  ```
+
+- **`honeypot-watchdog.sh`** — emails (via Resend) if the redirect goes missing,
+  the container stops, the dashboard stops regenerating, or Cowrie stops
+  capturing. Install, configure, and cron it:
+
+  ```bash
+  sudo cp deploy/honeypot-watchdog.sh /usr/local/bin/ && sudo chmod 755 /usr/local/bin/honeypot-watchdog.sh
+  sudo tee /etc/honeypot-watchdog.env >/dev/null <<'EOF'
+  RESEND_API_KEY=re_...
+  ALERT_FROM="Honeypot Watchdog <honeypot@mail.example.com>"
+  ALERT_TO=you@example.com
+  EOF
+  sudo chmod 600 /etc/honeypot-watchdog.env
+  /usr/local/bin/honeypot-watchdog.sh --test     # confirm email delivery
+  ( sudo crontab -l 2>/dev/null; echo '*/15 * * * * /usr/local/bin/honeypot-watchdog.sh' ) | sudo crontab -
+  ```
+
 ## Configuration
 
 A few non-env settings live at the top of each script:

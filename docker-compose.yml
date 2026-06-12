@@ -17,6 +17,12 @@ services:
     image: honeypot-dashboard:latest
     container_name: honeypot-dashboard
     network_mode: host
+    # Container runs as non-root uid 10001 (see Dockerfile). Add the host's
+    # 'cowrie' group (gid 988) as a supplementary group so it can read the
+    # bind-mounted Cowrie logs. NOTE: ./data on the host must be owned by 10001
+    # (the deploy/README covers the one-time `chown 10001:10001 data`).
+    group_add:
+      - "988"
     environment:
       HONEYPOT_DATA_DIR: /data
       COWRIE_LOG_PATH: /cowrie-logs/cowrie.json

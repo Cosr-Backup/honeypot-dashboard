@@ -10,6 +10,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# Run as a non-root user. It only needs to read the (world-readable) Cowrie logs
+# and write the /data volume, and it binds 9999 (a non-privileged port). The
+# compose file adds the host's cowrie group (gid 988) as a supplementary group
+# so log reads keep working even if those files stop being world-readable.
+RUN groupadd -g 10001 app && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin app
+
 # Defaults target a generic bridge-network run (docker run -p ...). The compose
 # file overrides SERVE_HOST / OLLAMA_URL for the host-network deployment.
 ENV PYTHONUNBUFFERED=1 \
@@ -24,8 +30,9 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 COPY app/ /app/
 
-RUN mkdir -p /data
+RUN mkdir -p /data && chown 10001:10001 /data
 VOLUME ["/data"]
+USER 10001:10001
 EXPOSE 9999
 
 # scheduler.py supervises serve.py + periodic generate/analytics.
