@@ -1,0 +1,24 @@
+# Only the app/ code needs to go into the image.
+.git
+.gitignore
+tests
+__snapshots__
+data
+_sources
+*.md
+Makefile
+playwright.config.js
+package*.json
+node_modules
+requirements-test.txt
+**/__pycache__
+*.pyc
+*.pyo
+*.bak
+*.bak.*
+*.pre-*
+# Never bake runtime data / generated artifacts into the image
+**/geoip_cache.json
+**/description_cache.json
+**/analytics.json
+**/dashboard.html

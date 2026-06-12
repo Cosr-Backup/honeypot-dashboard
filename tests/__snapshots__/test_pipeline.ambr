@@ -1,0 +1,10 @@
+# serializer version: 1
+# name: TestFullPipeline.test_html_snapshot
+  dict({
+    'contains_attacker_ip': True,
+    'has_body': True,
+    'has_doctype': True,
+    'html_length_approx': 31,
+    'total_sessions_shown': True,
+  })
+# ---

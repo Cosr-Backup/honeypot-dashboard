@@ -17,3 +17,8 @@ app/geoip_cache.json
 app/dashboard.html
 dashboard.html
 *.tmp
+# Container bind-mount data dir (caches, analytics.json, dashboard.html)
+/data/
+.pytest_cache/
+test-results/
+.venv/

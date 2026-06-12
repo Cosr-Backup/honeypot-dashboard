@@ -92,14 +92,21 @@ This disguise is effective — many attackers specifically try Solana-related cr
 honeypot-dashboard/
 ├── README.md
 ├── .gitignore
-└── app/
-    ├── generate.py              # Log parser + GeoIP + LLM + HTML renderer
-    ├── serve.py                 # HTTP server (localhost:9999, behind nginx)
-    ├── analytics.py             # Incremental analytics with byte-offset tracking
-    ├── dashboard.html           # Generated output (gitignored)
-    ├── description_cache.json   # LLM description cache (gitignored)
-    ├── geoip_cache.json         # GeoIP lookup cache (gitignored)
-    └── analytics.json           # Aggregated analytics data (gitignored)
+├── Dockerfile                  # Python 3.12 image for the dashboard
+├── docker-compose.yml          # Containerized deployment (host networking)
+├── Makefile                    # test / build / up / down / logs
+├── requirements-test.txt       # pytest + syrupy + pytest-mock
+├── app/
+│   ├── generate.py             # Log parser + GeoIP + LLM + HTML renderer
+│   ├── serve.py                # HTTP server (localhost:9999, behind nginx)
+│   ├── analytics.py            # Incremental analytics with byte-offset tracking
+│   └── scheduler.py            # Container supervisor (serve + periodic regen)
+├── tests/                      # pytest suite (parser, pipeline, XSS, regressions)
+└── data/                       # Runtime data, bind-mounted to /data (gitignored)
+    ├── dashboard.html          #   generated output
+    ├── description_cache.json  #   LLM description cache
+    ├── geoip_cache.json        #   GeoIP lookup cache
+    └── analytics.json          #   aggregated analytics data
 ```
 
 ## Setup
@@ -107,10 +114,16 @@ honeypot-dashboard/
 ### Prerequisites
 
 - A VPS or server you're comfortable exposing to the internet
-- Python 3.10+
+- Docker + Docker Compose (recommended) — or Python 3.12+ for a bare-metal run
+  (the dashboard uses 3.12-only f-string syntax and will not parse on 3.10/3.11)
 - [Cowrie](https://github.com/cowrie/cowrie) SSH/Telnet honeypot
-- [Ollama](https://ollama.ai/) with a small model (e.g., `qwen3:4b`) — optional but recommended
+- [Ollama](https://ollama.ai/) with a small model (e.g., `qwen3.5:9b`) — optional but recommended
 - nginx with Let's Encrypt for TLS
+
+> The dashboard itself runs in a container (see **Run with Docker** below).
+> Cowrie and Ollama stay as host services — Cowrie is the live honeypot capturing
+> traffic, and Ollama is the shared LLM backend; the container talks to both over
+> the host network. Steps 4–5 (cron + systemd) are only for a bare-metal run.
 
 ### 1. Install Cowrie
 
@@ -145,7 +158,7 @@ ollama pull qwen3:4b  # or any small model
 
 # The dashboard reads logs from Cowrie's default location:
 #   /home/cowrie/cowrie/var/log/cowrie/cowrie.json
-# If your Cowrie logs are elsewhere, edit LOG_PATH in generate.py and analytics.py
+# If your Cowrie logs are elsewhere, set COWRIE_LOG_PATH (see Configuration).
 ```
 
 ### 3. Configure nginx
@@ -218,30 +231,67 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
+## Run with Docker (recommended)
+
+The dashboard ships as a single container that supervises `serve.py` plus the
+periodic `generate.py` / `analytics.py` runs (`app/scheduler.py` — no host cron or
+systemd unit needed). It uses **host networking**, so it binds `127.0.0.1:9999`
+and reaches host Ollama on `localhost:11434` exactly like the bare-metal process
+did — the nginx config in front of it (step 3) needs no changes.
+
+Cowrie and Ollama remain host services; the container mounts Cowrie's log
+directory read-only and writes its caches/output to a bind-mounted `./data` dir.
+
+```bash
+# 1. Get the code onto the host
+git clone https://github.com/brezgis/honeypot-dashboard.git /opt/honeypot-dashboard
+cd /opt/honeypot-dashboard
+
+# 2. Free port 9999 by stopping any bare-metal dashboard service
+sudo systemctl disable --now honeypot-dashboard.service   # if it exists
+
+# 3. (Optional but recommended) seed ./data with existing caches so the first
+#    run doesn't re-fetch thousands of GeoIP lookups / re-generate descriptions
+mkdir -p data
+sudo cp /home/dashboard/app/{geoip_cache.json,description_cache.json,analytics.json,dashboard.html} data/ 2>/dev/null || true
+
+# 4. Build and start
+docker compose up -d --build
+docker compose logs -f --tail=50    # watch the first generate/analytics run
+```
+
+The container restarts automatically (`restart: unless-stopped`). To run the
+test suite in a matching Python 3.12 container: `make test`.
+
+### Container configuration (env)
+
+All set in `docker-compose.yml`; the same variables work for a bare-metal run.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `COWRIE_LOG_PATH` | `/home/cowrie/cowrie/var/log/cowrie/cowrie.json` | Cowrie JSON log location (`/cowrie-logs/cowrie.json` in-container) |
+| `HONEYPOT_DATA_DIR` | next to the scripts | Where caches, `analytics.json`, and `dashboard.html` are written (`/data` in-container) |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint for LLM descriptions |
+| `SERVE_HOST` | `127.0.0.1` | Address `serve.py` binds (set `0.0.0.0` for bridge networking) |
+| `SERVE_PORT` | `9999` | HTTP server port |
+| `REGEN_INTERVAL` | `300` | Seconds between dashboard/analytics regenerations |
+| `SERVE_REGEN_ON_START` | `1` | Whether `serve.py` regenerates on startup (the scheduler sets `0`) |
+
 ## Configuration
 
-Key settings are at the top of each script:
+A few non-env settings live at the top of each script:
 
-### generate.py
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LOG_PATH` | `/home/cowrie/cowrie/var/log/cowrie/cowrie.json` | Cowrie JSON log location |
-| `LOCAL_TZ` | `America/New_York` | Timezone for dashboard timestamps |
-
-### serve.py
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `9999` | HTTP server port (localhost only) |
-| `MIN_REGEN_INTERVAL` | `30` | Minimum seconds between regenerations |
-
-### analytics.py
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LOG_PATH` | `/home/cowrie/cowrie/var/log/cowrie/cowrie.json` | Cowrie JSON log location |
-| `RETENTION_DAYS` | `30` | Days to keep analytics data before pruning |
+| Setting | File | Default | Description |
+|---------|------|---------|-------------|
+| `LOCAL_TZ` | `generate.py` | `America/New_York` | Timezone for dashboard timestamps |
+| `MIN_REGEN_INTERVAL` | `serve.py` | `30` | Minimum seconds between on-demand regenerations |
+| `RETENTION_DAYS` | `analytics.py` | `30` | Days to keep analytics data before pruning |
 
 ### LLM Model
-The LLM model is specified in `generate.py`'s `llm_generate()` function. Default is `qwen3:4b`. Any Ollama-compatible model works — smaller models are faster, larger ones produce better descriptions.
+The LLM model is specified in `generate.py`'s `llm_generate()` function (`qwen3.5:9b`).
+Any Ollama-compatible model works — smaller models are faster, larger ones produce
+better descriptions. If Ollama is unreachable, descriptions fall back to
+template/regex generation and the dashboard still renders.
 
 ## Companion: Discord Alert Bot
 

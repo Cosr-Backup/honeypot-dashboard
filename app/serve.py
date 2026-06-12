@@ -11,9 +11,13 @@ import sys
 import threading
 import time
 
-PORT = 9999
+# Network + paths overridable via env for containerized deploys. The defaults
+# preserve the original on-host behavior (localhost:9999, files beside script).
+HOST = os.environ.get("SERVE_HOST", "127.0.0.1")
+PORT = int(os.environ.get("SERVE_PORT", "9999"))
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DASHBOARD_PATH = os.path.join(SCRIPT_DIR, "dashboard.html")
+DATA_DIR = os.environ.get("HONEYPOT_DATA_DIR", SCRIPT_DIR)
+DASHBOARD_PATH = os.path.join(DATA_DIR, "dashboard.html")
 GENERATE_SCRIPT = os.path.join(SCRIPT_DIR, "generate.py")
 
 # Minimum seconds between regenerations (avoid hammering GeoIP API)
@@ -81,12 +85,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         '<head>\n<meta http-equiv="refresh" content="30">',
                         1
                     )
+                encoded = content.encode()
                 self.send_response(200)
                 self.send_header("Content-type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(content.encode())))
+                self.send_header("Content-Length", str(len(encoded)))
                 self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
                 self.end_headers()
-                self.wfile.write(content.encode())
+                self.wfile.write(encoded)
                 return
             except FileNotFoundError:
                 self.send_response(200)
@@ -104,13 +109,16 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def main():
-    # Start regeneration in background — don't block the server
-    regenerate()
+    # Start regeneration in background — don't block the server. In the
+    # container the scheduler owns periodic regeneration, so this startup
+    # kick is opt-out via SERVE_REGEN_ON_START=0.
+    if os.environ.get("SERVE_REGEN_ON_START", "1") != "0":
+        regenerate()
 
-    server = http.server.HTTPServer(("127.0.0.1", PORT), DashboardHandler)
+    server = http.server.HTTPServer((HOST, PORT), DashboardHandler)
     print(f"\n{'='*60}")
     print(f"  Honeypot Dashboard Server")
-    print(f"  http://127.0.0.1:{PORT}")
+    print(f"  http://{HOST}:{PORT}")
     print(f"  Auto-refresh: 30 seconds")
     print(f"  Press Ctrl+C to stop")
     print(f"{'='*60}\n")

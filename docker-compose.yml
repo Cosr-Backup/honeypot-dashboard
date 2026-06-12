@@ -1,0 +1,35 @@
+# Honeypot dashboard — containerized deployment.
+#
+# Uses host networking so the container behaves, network-wise, exactly like the
+# old systemd process did:
+#   * binds 127.0.0.1:9999 (SERVE_HOST) — the existing nginx reverse proxy in
+#     front of it (TLS + HTTP basic auth) needs no changes;
+#   * reaches the host's Ollama on localhost:11434 with no extra plumbing
+#     (Ollama binds loopback, which host-gateway bridging could not reach).
+#
+# Before first start, stop the old host service so port 9999 is free:
+#   systemctl disable --now honeypot-dashboard.service
+#
+# Cowrie + Ollama stay as host services; this container is just the dashboard.
+services:
+  dashboard:
+    build: .
+    image: honeypot-dashboard:latest
+    container_name: honeypot-dashboard
+    network_mode: host
+    environment:
+      HONEYPOT_DATA_DIR: /data
+      COWRIE_LOG_PATH: /cowrie-logs/cowrie.json
+      OLLAMA_URL: http://localhost:11434
+      SERVE_HOST: 127.0.0.1
+      SERVE_PORT: "9999"
+      REGEN_INTERVAL: "300"
+      TZ: America/New_York
+    volumes:
+      # Persistent data: geoip/description caches, analytics.json, dashboard.html.
+      # Seed ./data with the existing caches before first start to avoid
+      # re-running thousands of GeoIP lookups and LLM descriptions.
+      - ./data:/data
+      # Cowrie JSON logs (+ rotated *.json.*), read-only.
+      - /home/cowrie/cowrie/var/log/cowrie:/cowrie-logs:ro
+    restart: unless-stopped

@@ -344,12 +344,17 @@ def build_profile_text(ip, attempt_count, ip_sessions, all_cmds, creds):
     return profile.strip()
 
 
-# Paths
+# Paths & endpoints — overridable via env for containerized deploys. The
+# defaults preserve the original on-host behavior exactly (data files alongside
+# the script, Cowrie logs at their fixed path, Ollama on localhost).
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_PATH = "/home/cowrie/cowrie/var/log/cowrie/cowrie.json"
-CACHE_PATH = os.path.join(SCRIPT_DIR, "geoip_cache.json")
-OUTPUT_PATH = os.path.join(SCRIPT_DIR, "dashboard.html")
-CACHE_FILE = os.path.join(SCRIPT_DIR, "description_cache.json")
+DATA_DIR = os.environ.get("HONEYPOT_DATA_DIR", SCRIPT_DIR)
+LOG_PATH = os.environ.get("COWRIE_LOG_PATH", "/home/cowrie/cowrie/var/log/cowrie/cowrie.json")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+os.makedirs(DATA_DIR, exist_ok=True)
+CACHE_PATH = os.path.join(DATA_DIR, "geoip_cache.json")
+OUTPUT_PATH = os.path.join(DATA_DIR, "dashboard.html")
+CACHE_FILE = os.path.join(DATA_DIR, "description_cache.json")
 
 
 def atomic_json_write(filepath, data, indent=2):
@@ -1107,7 +1112,7 @@ def analyze_events(events, geo_cache):
 def ollama_healthy():
     """Quick check if Ollama is responding."""
     try:
-        req = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
         resp = urllib.request.urlopen(req, timeout=2)
         return resp.status == 200
     except Exception:
@@ -1132,7 +1137,7 @@ def llm_generate(prompt, model="qwen3.5:9b", temperature=0.5, max_tokens=30):
     try:
         payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "think": False, "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": 512, "stop": ["\n"]}}).encode()
         req = urllib.request.Request(
-            "http://localhost:11434/api/generate",
+            f"{OLLAMA_URL}/api/generate",
             data=payload,
             headers={"Content-Type": "application/json"}
         )
@@ -1486,7 +1491,13 @@ def generate_attacker_narratives(data, desc_cache=None):
                 narrative = " → ".join(steps)
                 if repeated:
                     top_repeated = max(repeated, key=lambda x: x[1])
-                    ann = annotate_command(top_repeated[0]) or top_repeated[0].split()[0].split("/")[-1]
+                    # Guard against empty/whitespace command strings: "".split()
+                    # is [] and [0] would raise IndexError (production crash:
+                    # [FATAL] list index out of range). Fall back to "?".
+                    top_cmd = top_repeated[0].strip()
+                    ann = annotate_command(top_repeated[0]) or (
+                        top_cmd.split()[0].split("/")[-1] if top_cmd else "?"
+                    )
                     narrative += f" (repeated {ann} {top_repeated[1]}x)"
             else:
                 # Complex command set — use LLM
@@ -2619,32 +2630,50 @@ def main():
     print("[*] Parsing Cowrie log...")
     rotated = sorted(f for f in glob.glob(LOG_PATH + "*") if f != LOG_PATH)
     log_files = rotated + [LOG_PATH]
-    seen = set()
-    events = []
-    for lf in log_files:
-        if lf not in seen:
-            seen.add(lf)
-            events.extend(parse_log(lf))
-    print(f"[*] Loaded {len(events)} events from {len(log_files)} files")
 
+    # Stream-filter while loading: apply the 60-day window and dedup per event so
+    # the full multi-month log history is never held in memory at once. Previously
+    # every rotated file was parsed in full into one list *before* filtering, which
+    # was the source of the multi-GB memory peak. The resulting event set (and its
+    # order) is identical to the old load -> filter -> dedup sequence.
     cutoff = datetime.now(timezone.utc) - timedelta(days=60)
-    before_filter = len(events)
-    events = [e for e in events if datetime.fromisoformat(
-        e.get('timestamp', '2000-01-01T00:00:00').replace('Z', '+00:00')
-    ) > cutoff]
-    if len(events) < before_filter:
-        print(f"[*] Filtered to last 60 days: {len(events)} events (dropped {before_filter - len(events)} old)")
-
+    seen_files = set()
     seen_events = set()
-    unique_events = []
-    for e in events:
-        key = (e.get('session', ''), e.get('timestamp', ''), e.get('eventid', ''))
-        if key not in seen_events:
+    events = []
+    total_parsed = 0
+    dropped_old = 0
+    dropped_dup = 0
+    for lf in log_files:
+        if lf in seen_files:
+            continue
+        seen_files.add(lf)
+        for e in parse_log(lf):
+            total_parsed += 1
+            # 60-day window. Missing/malformed timestamps are treated as "old"
+            # and dropped — same outcome as the previous default-to-year-2000
+            # behavior, but without crashing on an unparseable timestamp.
+            ts_str = e.get('timestamp', '')
+            try:
+                ts_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+            except (ValueError, AttributeError):
+                dropped_old += 1
+                continue
+            if ts_dt <= cutoff:
+                dropped_old += 1
+                continue
+            # Dedup on (session, timestamp, eventid), first occurrence wins.
+            key = (e.get('session', ''), ts_str, e.get('eventid', ''))
+            if key in seen_events:
+                dropped_dup += 1
+                continue
             seen_events.add(key)
-            unique_events.append(e)
-    if len(unique_events) < len(events):
-        print(f"[*] After dedup: {len(unique_events)} unique events (removed {len(events) - len(unique_events)} duplicates)")
-    events = unique_events
+            events.append(e)
+
+    print(f"[*] Loaded {total_parsed} events from {len(seen_files)} files")
+    if dropped_old:
+        print(f"[*] Filtered to last 60 days: {len(events) + dropped_dup} events (dropped {dropped_old} old)")
+    if dropped_dup:
+        print(f"[*] After dedup: {len(events)} unique events (removed {dropped_dup} duplicates)")
 
     if not events:
         print("[!] No events found. Generating empty dashboard.")

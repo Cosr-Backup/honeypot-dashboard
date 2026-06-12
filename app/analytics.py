@@ -20,11 +20,15 @@ import urllib.error
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
-# Configuration
+# Configuration — paths overridable via env for containerized deploys. The
+# defaults preserve the original on-host behavior (data beside the script,
+# Cowrie logs at their fixed path).
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_PATH = "/home/cowrie/cowrie/var/log/cowrie/cowrie.json"
-ANALYTICS_PATH = os.path.join(SCRIPT_DIR, "analytics.json")
-GEOIP_CACHE_PATH = os.path.join(SCRIPT_DIR, "geoip_cache.json")
+DATA_DIR = os.environ.get("HONEYPOT_DATA_DIR", SCRIPT_DIR)
+LOG_PATH = os.environ.get("COWRIE_LOG_PATH", "/home/cowrie/cowrie/var/log/cowrie/cowrie.json")
+os.makedirs(DATA_DIR, exist_ok=True)
+ANALYTICS_PATH = os.path.join(DATA_DIR, "analytics.json")
+GEOIP_CACHE_PATH = os.path.join(DATA_DIR, "geoip_cache.json")
 
 # Retention: prune data older than this
 RETENTION_DAYS = 30
