@@ -8,6 +8,12 @@ Fixes applied (2026-02-06):
 - L5: Moved imports (math, random, re) to top of file
 - L7: Bare except → specific exception types in load_cache()
 - M5: Seed random with IP hash for deterministic command explanations
+
+Fixes applied (2026-03-24) - Pike:
+- H1/H3: Shared desc_cache between generate_greatest_hits and generate_attacker_narratives
+         (single load + single save per generate_html run, no partial-write race)
+- H2: Removed dead classify_commands_fast function (~80 lines, never called)
+- M1: Consolidated inline _bad_starts lists into module-level _BAD_PREFIXES
 """
 
 import glob
@@ -29,6 +35,314 @@ from html import escape as h
 from zoneinfo import ZoneInfo
 
 LOCAL_TZ = ZoneInfo("America/New_York")
+
+def strip_markdown(text):
+    """Strip markdown formatting from LLM output before inserting into HTML."""
+    if not text:
+        return text
+    # Remove headers (### Header -> Header)
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Remove bold/italic markers
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    text = re.sub(r'_(.+?)_', r'\1', text)
+    # Remove inline code backticks
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    # Remove code blocks
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    # Remove horizontal rules
+    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\*\*\*+$', '', text, flags=re.MULTILINE)
+    # Remove bullet points
+    text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
+    # Remove numbered lists prefix
+    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
+    # Collapse multiple newlines/whitespace
+    text = re.sub(r'\n+', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    # Final safety: remove any remaining markdown artifacts
+    text = text.replace('**', '').replace('__', '').replace('`', '')
+    # Remove any leftover # at start of text
+    text = re.sub(r'^#+\s*', '', text)
+    return text.strip()
+
+
+# Meta-phrase patterns that indicate bad LLM output
+_BAD_PREFIXES = [
+    "based on the", "here is the", "here is a", "here's the", "here's a",
+    "as an ai", "i'll analyze", "i will analyze", "let me analyze",
+    "the following", "this is a", "this is the", "i can see",
+    "looking at the", "analyzing the", "the attacker profile",
+    "attacker profile:", "summary:", "analysis:",
+    "(do not include", "arrow-chain summary",
+    "attacker:", "attacker profile", "the attacker",
+    # Inline bad-starts from generate_greatest_hits / generate_attacker_narratives (M1 fix)
+    "here", "i can", "we ", "okay",
+    "this command", "it looks", "the user", "based on",
+    "sure",
+]
+
+
+def validate_llm_output(text, max_chars=300):
+    """Check if LLM output is good quality. Returns (is_valid, reason)."""
+    if not text:
+        return False, "empty"
+    text_lower = text.lower().strip()
+    for prefix in _BAD_PREFIXES:
+        if text_lower.startswith(prefix):
+            return False, f"meta-prefix: {prefix}"
+    if len(text) > max_chars:
+        return False, f"too long ({len(text)} chars)"
+    # Check for any residual markdown
+    if re.search(r'^#{1,6}\s', text, re.MULTILINE):
+        return False, "contains markdown headers"
+    if '**' in text:
+        return False, "contains bold markdown"
+    if '`' in text:
+        return False, "contains backtick markdown"
+    # Reject descriptions that just restate stats (attempt counts, session counts)
+    if re.match(r'^\d[\d,]*\s+(attempts?|sessions?|commands?)', text_lower):
+        return False, "just restates stats"
+    # Reject descriptions that are just country/ISP metadata
+    if re.match(r'^(attacker:?\s+)?(from\s+)?[A-Z][a-z]+[,\s]', text) and len(text) < 80:
+        # Check if it's mostly proper nouns and metadata (no action verbs)
+        action_words = ["brute", "scan", "target", "credential", "dump", "download",
+                        "execute", "deploy", "persist", "recon", "fingerprint", "probe",
+                        "exploit", "attack", "compromise", "harvest", "spray", "stuff",
+                        "audit", "profile", "pivot", "shell", "payload", "miner", "botnet"]
+        if not any(w in text_lower for w in action_words):
+            return False, "just metadata, no attack description"
+    return True, "ok"
+
+
+# === Prompt Routing System ===
+# Tested prompts from honeypot-prompt-routing.md
+# Pike <pike@brezgis.com> 2026-03-22
+
+PROMPT_SOPHISTICATED = (
+    "You are a security analyst writing one-liner descriptions for a honeypot dashboard.\n"
+    "Technically precise, dry wit. The humor comes from what attackers actually do.\n\n"
+    "Rules:\n"
+    "- One sentence, under 200 characters\n"
+    "- No markdown, no backticks, no bullet points\n"
+    "- Don\'t start with \"The attacker\" or \"An attacker\"\n"
+    "- Don\'t restate metadata (country, IP, ISP)\n"
+    "- Don\'t say \"honeypot\"\n"
+    "- Lead with the most interesting technical action\n"
+    "- ONLY describe actions listed in the profile \u2014 do NOT invent additional actions\n\n"
+    "Examples:\n"
+    "- \"Chattr\'d .ssh, injected the mdrfckr key, changed root password, inventoried the hardware \u2014 methodical takeover in one session.\"\n"
+    "- \"Wrote uname -a to a shell script, chmod 777\'d it, and executed it \u2014 could\'ve just typed it, but cargo-cult habits die hard.\"\n"
+    "- \"SSH key injection followed by chattr lockdown and hardware census \u2014 this one runs a tight ship for a script kiddie.\"\n\n"
+    "Describe this attacker in one sentence:\n"
+    "{profile}"
+)
+
+PROMPT_RECON = (
+    "You are a security analyst writing one-liner descriptions for a honeypot dashboard.\n"
+    "Technically precise, dry wit.\n\n"
+    "Rules:\n"
+    "- One sentence, under 200 characters\n"
+    "- No markdown, no backticks\n"
+    "- Don\'t start with \"The attacker\"\n"
+    "- Don\'t restate metadata (country, IP, ISP)\n"
+    "- Don\'t say \"honeypot\"\n"
+    "- Highlight the repetition or futility\n\n"
+    "Examples:\n"
+    "- \"3,951 sessions of the exact same uname command with Solana creds \u2014 dedication to monotony.\"\n"
+    "- \"Showed up with validator credentials, ran uname four times, left \u2014 window-shopping for crypto nodes.\"\n"
+    "- \"172 attempts, 4 logins; massive fingerprinting script with custom separators \u2014 likely probing for honeypot signatures.\"\n"
+    "- \"Ran uname eight times with default credentials, proving they prefer repetition over reading the manual.\"\n\n"
+    "Describe this attacker in one sentence:\n"
+    "{profile}"
+)
+
+PROMPT_BOMBER = (
+    "You write terse, deadpan one-liners for a security dashboard.\n"
+    "Let the absurdity of the facts speak for itself.\n\n"
+    "Rules:\n"
+    "- One sentence, under 200 characters\n"
+    "- No markdown, no backticks\n"
+    "- Don\'t start with \"The attacker\" or \"An attacker\"\n"
+    "- Don\'t restate metadata (country, IP, ISP)\n"
+    "- Don\'t say \"honeypot\"\n"
+    "- State the single most telling fact. Deadpan.\n"
+    "- Mention the most absurd passwords by name.\n\n"
+    "Examples:\n"
+    "- \"Thirty thousand root attempts with French names as passwords, breached twice, said ok, and left.\"\n"
+    "- \"18,583 root attempts, never got in \u2014 not even once.\"\n"
+    "- \"13k root tries, one succeeded. Echoed \'ok\' then exited. Passwords: jetaime, slipknot1, monster1.\"\n\n"
+    "Describe this attacker in one sentence:\n"
+    "{profile}"
+)
+
+PROMPT_DRIVEBY = (
+    "Write a brief, dismissive one-liner for a security dashboard.\n\n"
+    "Rules:\n"
+    "- One sentence, under 150 characters\n"
+    "- No markdown, no backticks\n"
+    "- Don\'t start with \"The attacker\"\n"
+    "- Don\'t say \"honeypot\"\n"
+    "- Be terse. These aren\'t interesting.\n\n"
+    "Examples:\n"
+    "- \"Ubuntu:ubuntu, in, no commands, left.\"\n"
+    "- \"Tried root:12345, failed, moved on.\"\n"
+    "- \"admin:admin, logged in, did nothing, and left.\"\n\n"
+    "Describe this attacker in one sentence:\n"
+    "{profile}"
+)
+
+PROMPT_PERSISTENT = (
+    "You are a security analyst writing one-liner descriptions for a honeypot dashboard.\n"
+    "Dry wit, technically precise. Focus on the persistence angle.\n\n"
+    "Rules:\n"
+    "- One sentence, under 200 characters\n"
+    "- No markdown, no backticks\n"
+    "- Don\'t start with \"The attacker\" or \"An attacker\"\n"
+    "- Don\'t restate metadata\n"
+    "- Don\'t say \"honeypot\"\n"
+    "- Highlight the repetition or patience\n\n"
+    "Examples:\n"
+    "- \"18 sessions with sequential passwords (123, 1234, 12345...) \u2014 like a determined toddler with a dictionary.\"\n"
+    "- \"Ran HONEYPOT_TEST_12345 across seven sessions \u2014 turns out the answer was yes.\"\n"
+    "- \"153 sessions of whoami and ssh -V with passwords counting up from 123 \u2014 either testing infrastructure or deeply committed to boredom.\"\n\n"
+    "Describe this attacker in one sentence:\n"
+    "{profile}"
+)
+
+_CATEGORY_PROMPTS = {
+    'sophisticated': PROMPT_SOPHISTICATED,
+    'recon': PROMPT_RECON,
+    'bomber': PROMPT_BOMBER,
+    'persistent': PROMPT_PERSISTENT,
+    'driveby': PROMPT_DRIVEBY,
+}
+
+RECON_KEYWORDS = {
+    'uname', '/proc/cpu', '/proc/mem', 'lscpu', 'nproc', 'hostname',
+    'whoami', 'id', 'free', 'df', 'uptime', '/etc/os-release',
+    '/bin/./uname',
+}
+
+
+def _is_mostly_recon(commands):
+    """Check if >60% of commands are recon-type."""
+    if not commands:
+        return False
+    recon_count = sum(1 for cmd in commands
+                      if any(kw in cmd.lower() for kw in RECON_KEYWORDS))
+    return recon_count / len(commands) > 0.6
+
+
+def classify_attacker(attempt_count, session_count, command_count, unique_commands,
+                      has_ssh_key, has_payload, interestingness_score):
+    """Classify attacker into routing category.
+    Returns: 'sophisticated', 'recon', 'bomber', 'persistent', 'driveby'"""
+    if has_ssh_key or has_payload:
+        return 'sophisticated'
+    if interestingness_score > 20:
+        return 'sophisticated'
+    if command_count > 0 and _is_mostly_recon(unique_commands):
+        return 'recon'
+    if attempt_count > 1000 and command_count < 3:
+        return 'bomber'
+    if session_count > 5 and attempt_count < 5000:
+        return 'persistent'
+    if attempt_count < 100 and session_count <= 2:
+        return 'driveby'
+    return 'bomber'
+
+
+def _category_fallback(category, profile_data):
+    """Category-appropriate fallback when LLM fails."""
+    if category == 'sophisticated':
+        actions = profile_data.get('key_actions', 'recon and exploitation')
+        return "Gained access and ran %s \u2014 hands-on-keyboard operator." % actions
+    elif category == 'recon':
+        logins = profile_data.get('login_count', 'multiple')
+        return "Logged in %s times, ran the same fingerprinting commands, left." % logins
+    elif category == 'bomber':
+        count = profile_data.get('attempt_count', 'thousands of')
+        passwords = profile_data.get('notable_passwords', '')
+        if passwords:
+            return "%s login attempts with passwords like %s \u2014 never got anywhere." % (count, passwords)
+        return "%s login attempts, brute-forcing with a dictionary \u2014 no luck." % count
+    elif category == 'persistent':
+        sessions = profile_data.get('session_count', 'multiple')
+        return "Kept coming back across %s sessions \u2014 persistence without payoff." % sessions
+    elif category == 'driveby':
+        cred = profile_data.get('top_cred', 'default creds')
+        got_in = profile_data.get('got_in', False)
+        if got_in:
+            return "%s, in, nothing, gone." % cred
+        return "Tried %s, failed, moved on." % cred
+    return "Attempted access without notable activity."
+
+
+def build_profile_text(ip, attempt_count, ip_sessions, all_cmds, creds):
+    """Build natural-language profile summary for the LLM prompt.
+    Curated to give the model the right material for each category."""
+    login_count = len(ip_sessions)
+    parts = ["%d attempts" % attempt_count]
+    if login_count > 0:
+        parts.append("%d login%s" % (login_count, 's' if login_count != 1 else ''))
+    profile = ", ".join(parts) + ". "
+
+    if all_cmds:
+        unique = list(dict.fromkeys(all_cmds))
+        cmd_samples = [cmd[:120] for cmd in unique[:8]]
+        profile += "Commands: " + " | ".join(cmd_samples) + ". "
+
+        cmd_str = " ".join(all_cmds).lower()
+        if "authorized_keys" in cmd_str or "ssh-keygen" in cmd_str:
+            profile += "SSH key injection detected. "
+        if "chattr" in cmd_str:
+            profile += "Used chattr for file locking. "
+        if "mdrfckr" in cmd_str:
+            profile += "Injected mdrfckr SSH key. "
+        if re.search(r'passwd\b', cmd_str):
+            profile += "Changed root password. "
+        if "wget" in cmd_str or "curl" in cmd_str:
+            profile += "Downloaded remote payload. "
+        if re.search(r'chmod\s+(777|\+x)', cmd_str):
+            profile += "Made files executable. "
+        if "hosts.deny" in cmd_str:
+            profile += "Cleared hosts.deny. "
+        if any(x in cmd_str for x in ["xmrig", "minerd", "cpuminer"]):
+            profile += "Deployed cryptominer. "
+    elif login_count > 0:
+        profile += "Got in but ran no commands. "
+
+    # Notable passwords
+    if creds:
+        unique_creds = list(set(creds))
+        exotic = [c for c in unique_creds if c not in BORING_CREDS]
+        if exotic:
+            passwords = []
+            for c in exotic[:5]:
+                sep = ":" if ":" in c else "/"
+                passwords.append(c.split(sep)[-1])
+            if passwords:
+                profile += "Notable passwords: " + ", ".join(passwords) + ". "
+
+        pw_list = []
+        for c in creds[:20]:
+            sep = ":" if ":" in c else "/"
+            pw_list.append(c.split(sep)[-1])
+        seq = [p for p in pw_list if p in ("123", "1234", "12345", "123456", "1234567", "12345678")]
+        if len(seq) >= 3:
+            profile += "Sequential passwords (123, 1234, 12345...). "
+
+        cred_str_lower = " ".join(creds).lower()
+        if any(w in cred_str_lower for w in ["solana", "validator", "raydium", "firedancer", "snarkos"]):
+            profile += "Using crypto/Solana credentials. "
+
+    if all_cmds and len(set(all_cmds)) == 1 and "echo" in all_cmds[0].lower():
+        profile += "Only command: echo ok. "
+
+    return profile.strip()
+
 
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -223,7 +537,7 @@ def save_geo_cache(cache):
 
 def batch_geoip_lookup(ips, cache):
     """Lookup IPs via ip-api.com batch endpoint (max 100 per request)."""
-    to_lookup = [ip for ip in ips if ip not in cache]
+    to_lookup = [ip for ip in ips if ip not in cache or (isinstance(cache.get(ip), dict) and cache[ip].get("country") == "Unknown")]
     if not to_lookup:
         return cache
 
@@ -346,26 +660,13 @@ def generate_nickname(ip, geo, creds_tried=None):
 
 
 def load_cache():
-    """Load description cache (L7 fix: specific exception types)."""
+    """Load description cache. Good descriptions are permanent — no expiry."""
     try:
         with open(CACHE_FILE, "r") as f:
             cache = json.load(f)
     except (json.JSONDecodeError, IOError, OSError):
         return {}
-    # Prune entries older than 30 days
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    pruned = {}
-    for k, v in cache.items():
-        if isinstance(v, dict) and "_cached_at" in v:
-            if v["_cached_at"] > cutoff:
-                pruned[k] = v
-        elif isinstance(v, str):
-            pruned[k] = v
-        else:
-            pruned[k] = v
-    if len(pruned) < len(cache):
-        print(f"[*] Pruned {len(cache) - len(pruned)} stale description cache entries")
-    return pruned
+    return cache
 
 def _cache_get(cache, key):
     """Get value from cache, handling both old (string) and new (dict with text) formats."""
@@ -373,8 +674,11 @@ def _cache_get(cache, key):
     if v is None:
         return None
     if isinstance(v, dict):
-        return v.get("text", v.get("story", ""))
-    return v
+        text = v.get("text", v.get("story", ""))
+    else:
+        text = v
+    # Always strip markdown from cached values on read
+    return strip_markdown(text) if text else text
 
 def save_cache(cache):
     """Save description cache atomically (H3 fix)."""
@@ -476,7 +780,12 @@ def analyze_events(events, geo_cache):
                 hourly_attempts[dt_local.hour] += 1
             except (ValueError, AttributeError):
                 pass
-            recent_events.append({"ts": ts, "ip": ip, "action": f"Login attempt: {h(u)}/{h(p)}"})
+            key_type = e.get("type", "")
+            if key_type and not p:
+                action = f"🔑 Key auth: {h(u)} ({h(key_type)})"
+            else:
+                action = f"Login attempt: {h(u)}/{h(p)}"
+            recent_events.append({"ts": ts, "ip": ip, "action": action})
 
         elif eid == "cowrie.login.success":
             stats["total_login_attempts"] += 1
@@ -545,7 +854,19 @@ def analyze_events(events, geo_cache):
         })
 
     top_creds = cred_combos.most_common(20)
-    recent_events = recent_events[-20:]
+    # Take last 100 events, then group consecutive same-IP same-action-type
+    raw_recent = recent_events[-100:]
+    grouped_recent = []
+    for ev in raw_recent:
+        action_type = ev["action"].split(":")[0]
+        grp_key = (ev["ip"], action_type)
+        if grouped_recent and grouped_recent[-1]["_group_key"] == grp_key:
+            grouped_recent[-1]["count"] += 1
+            grouped_recent[-1]["last_ts"] = ev["ts"]
+        else:
+            grouped_recent.append({**ev, "_group_key": grp_key, "count": 1,
+                                   "first_ts": ev["ts"], "last_ts": ev["ts"]})
+    recent_events = grouped_recent[-20:]
 
     markers = []
     seen_ips = set()
@@ -673,6 +994,84 @@ def analyze_events(events, geo_cache):
     peak_hour = max(hourly_attempts.items(), key=lambda x: x[1])[0] if hourly_attempts else 0
     peak_hour_str = f"{peak_hour:02d}:00–{(peak_hour+1)%24:02d}:00"
 
+    # Compute last 24h stats
+    now_utc = datetime.now(timezone.utc)
+    cutoff_24h = now_utc - timedelta(hours=24)
+    last_24h = {
+        "sessions": 0,
+        "login_attempts": 0,
+        "successful_logins": 0,
+        "unique_ips": set(),
+        "commands": 0,
+    }
+    for e in events:
+        ts = e.get("timestamp", "")
+        if not ts:
+            continue
+        try:
+            evt_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        if evt_dt < cutoff_24h:
+            continue
+        eid = e.get("eventid", "")
+        ip = e.get("src_ip", "")
+        if eid == "cowrie.session.connect":
+            last_24h["sessions"] += 1
+            if ip:
+                last_24h["unique_ips"].add(ip)
+        elif eid == "cowrie.login.failed":
+            last_24h["login_attempts"] += 1
+            if ip:
+                last_24h["unique_ips"].add(ip)
+        elif eid == "cowrie.login.success":
+            last_24h["login_attempts"] += 1
+            last_24h["successful_logins"] += 1
+            if ip:
+                last_24h["unique_ips"].add(ip)
+        elif eid == "cowrie.command.input":
+            last_24h["commands"] += 1
+    last_24h["unique_ips"] = len(last_24h["unique_ips"])
+
+    # Compute peak day for each metric
+    def _peak(daily_counter):
+        if not daily_counter:
+            return (0, "—")
+        day, val = max(daily_counter.items(), key=lambda x: x[1])
+        try:
+            dt = datetime.strptime(day, "%Y-%m-%d")
+            short = dt.strftime("%b %-d")
+        except (ValueError, AttributeError):
+            short = day[5:]
+        return (val, short)
+
+    peak_sessions = _peak(daily_sessions)
+    peak_logins = _peak(daily_login_attempts)
+    peak_successful = _peak(daily_successful)
+    peak_commands = _peak(daily_commands)
+    # Peak unique IPs per day
+    daily_unique_ip_counts = {day: len(ips) for day, ips in daily_ips.items()}
+    peak_ips = _peak(daily_unique_ip_counts)
+
+    # Peak daily success rate
+    daily_success_rates = {}
+    for day in daily_login_attempts:
+        attempts = daily_login_attempts[day]
+        if attempts > 0:
+            rate = daily_successful.get(day, 0) / attempts * 100
+            daily_success_rates[day] = round(rate, 1)
+    if daily_success_rates:
+        peak_sr_day = max(daily_success_rates, key=daily_success_rates.get)
+        peak_sr_val = daily_success_rates[peak_sr_day]
+        try:
+            dt = datetime.strptime(peak_sr_day, "%Y-%m-%d")
+            peak_sr_short = dt.strftime("%b %-d")
+        except (ValueError, AttributeError):
+            peak_sr_short = peak_sr_day[5:]
+        peak_success_rate = (peak_sr_val, peak_sr_short)
+    else:
+        peak_success_rate = (0, "—")
+
     return {
         "stats": stats,
         "today_stats": today_stats,
@@ -694,6 +1093,13 @@ def analyze_events(events, geo_cache):
         "unique_countries": len(unique_countries),
         "busiest_day": busiest_day,
         "peak_hour": peak_hour_str,
+        "last_24h": last_24h,
+        "peak_sessions": peak_sessions,
+        "peak_logins": peak_logins,
+        "peak_successful": peak_successful,
+        "peak_commands": peak_commands,
+        "peak_ips": peak_ips,
+        "peak_success_rate": peak_success_rate,
         "generated": datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S %Z"),
     }
 
@@ -719,102 +1125,201 @@ def _check_ollama_once():
     return _ollama_is_healthy
 
 
-def llm_generate(prompt, model="qwen3:4b", temperature=0.5, max_tokens=30):
+def llm_generate(prompt, model="qwen3.5:9b", temperature=0.5, max_tokens=30):
     """Call Ollama to generate text using raw mode. Falls back to empty string on failure."""
     if not _check_ollama_once():
         return ""
     try:
-        payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "raw": True, "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": 512, "stop": ["\n"]}}).encode()
+        payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "think": False, "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": 512, "stop": ["\n"]}}).encode()
         req = urllib.request.Request(
             "http://localhost:11434/api/generate",
             data=payload,
             headers={"Content-Type": "application/json"}
         )
-        resp = urllib.request.urlopen(req, timeout=30)
+        resp = urllib.request.urlopen(req, timeout=300)  # 5min for CPU inference
         return json.loads(resp.read()).get("response", "").strip()
     except Exception as e:
         print(f"[!] LLM generation failed: {e}")
         return ""
 
 
-def generate_greatest_hits(data):
-    """Generate attacker stories for top attackers, with per-session LLM summaries."""
+def compute_interestingness(ip, attempt_count, data):
+    """Score an attacker's interestingness for greatest hits ranking.
+    Prioritizes command diversity and sophistication over raw volume."""
+    score = 0.0
+
+    # Base score from attempts (log scale, diminishing returns)
+    score += min(math.log2(max(attempt_count, 1) + 1) * 2, 15)
+
+    # Find sessions for this IP
+    ip_sessions = [s for s in data.get("successful_sessions", []) if s["ip"] == ip]
+    all_cmds = []
+    for s in ip_sessions:
+        all_cmds.extend([c["cmd"] for c in s["commands"]])
+
+    # Big bonus for having commands at all
+    if all_cmds:
+        score += 20
+
+    # Bonus for command count and diversity
+    unique_cmds = set(all_cmds)
+    score += min(len(unique_cmds) * 3, 30)
+    score += min(len(all_cmds) * 0.5, 10)
+
+    # Bonus for multiple sessions
+    if len(ip_sessions) > 1:
+        score += min(len(ip_sessions) * 2, 10)
+
+    # Bonus for sophisticated attack patterns
+    cmd_str = " ".join(all_cmds).lower()
+    sophisticated_patterns = [
+        ("authorized_keys", 15, "SSH key injection"),
+        ("ssh-keygen", 12, "SSH key generation"),
+        ("chattr", 10, "file attribute tampering"),
+        ("crontab", 10, "persistence via cron"),
+        ("/etc/cron", 10, "persistence via cron"),
+        ("wget", 8, "payload download"),
+        ("curl", 8, "payload download"),
+        ("base64", 10, "obfuscated payload"),
+        ("nc -", 12, "reverse shell"),
+        ("/dev/tcp/", 12, "bash reverse shell"),
+        ("iptables", 8, "firewall tampering"),
+        ("useradd", 10, "backdoor account"),
+        ("xmrig", 10, "cryptominer"),
+        ("docker", 8, "container manipulation"),
+        ("dmidecode", 5, "hardware profiling"),
+        ("lspci", 5, "hardware profiling"),
+    ]
+    for pattern, bonus, _ in sophisticated_patterns:
+        if pattern in cmd_str:
+            score += bonus
+
+    # Penalty for generic-only credentials
+    creds = data.get("ip_creds", {}).get(ip, [])
+    if creds and not all_cmds:
+        boring_count = sum(1 for c in creds if c in BORING_CREDS)
+        if boring_count == len(creds):
+            score -= 5  # All boring creds, no commands = not interesting
+
+    return score
+
+
+def generate_greatest_hits(data, desc_cache=None):
+    """Generate attacker stories using prompt routing system.
+    Each attacker is classified and gets a category-specific prompt.
+    Pike <pike@brezgis.com> 2026-03-22
+    H1/H3 fix: accepts shared desc_cache from caller; if None, loads own copy."""
     hits = []
     geo_cache = data.get("geo_cache", {})
     ip_creds = data.get("ip_creds", {})
-    desc_cache = load_cache()
+    _owns_cache = desc_cache is None
+    if _owns_cache:
+        desc_cache = load_cache()
 
-    for attacker in data["top_attackers"][:6]:
+    scored_attackers = []
+    for attacker in data["top_attackers"]:
+        score = compute_interestingness(attacker["ip"], attacker["count"], data)
+        scored_attackers.append((score, attacker))
+    scored_attackers.sort(key=lambda x: x[0], reverse=True)
+    ranked_attackers = [a for _, a in scored_attackers[:6]]
+
+    for attacker in ranked_attackers:
         nick = attacker["nickname"]
         ip = attacker["ip"]
         count = attacker["count"]
         country = attacker.get("country", "Unknown")
-        city = attacker.get("city", "")
-        isp = attacker.get("isp", "Unknown")
 
-        # Collect per-session command lists
-        ip_sessions = []
-        for s in data.get("successful_sessions", []):
-            if s["ip"] == ip:
-                ip_sessions.append(s)
-        
+        ip_sessions = [s for s in data.get("successful_sessions", []) if s["ip"] == ip]
         all_cmds = []
         for s in ip_sessions:
             all_cmds.extend([c["cmd"] for c in s["commands"]])
 
         creds = ip_creds.get(ip, [])
-        creds_str = ", ".join(creds[:5]) if creds else "none captured"
+        unique_cmds = list(set(all_cmds))
 
+        # Detect attack patterns
+        cmd_str_lower = " ".join(all_cmds).lower() if all_cmds else ""
+        has_ssh_key = "authorized_keys" in cmd_str_lower or "ssh-keygen" in cmd_str_lower
+        has_payload = bool(re.search(r'(wget|curl)\s+https?://', cmd_str_lower)) or \
+                      ("chmod" in cmd_str_lower and ("777" in cmd_str_lower or "+x" in cmd_str_lower))
+        int_score = compute_interestingness(ip, count, data)
+
+        total_sessions = max(len(ip_sessions), 1)
+        first_seen = data.get("ip_first_seen", {}).get(ip, "")
+        last_seen = data.get("ip_last_seen", {}).get(ip, "")
+
+        category = classify_attacker(
+            attempt_count=count,
+            session_count=total_sessions,
+            command_count=len(all_cmds),
+            unique_commands=unique_cmds,
+            has_ssh_key=has_ssh_key,
+            has_payload=has_payload,
+            interestingness_score=int_score
+        )
+        print(f"[*] {nick} ({ip}): category={category}, attempts={count}, cmds={len(all_cmds)}, score={int_score:.1f}")
+
+        # Cache check — good descriptions are permanent
         cmd_hash = hashlib.md5(str(sorted(set(all_cmds))).encode()).hexdigest()[:8] if all_cmds else "nocmds"
         cache_key = f"gh_{ip}_{cmd_hash}"
-        
-        if cache_key in desc_cache:
-            story = _cache_get(desc_cache, cache_key)
-        elif all_cmds:
-            key_cmds = set()
-            for cmd in all_cmds[:10]:
-                for part in re.split(r'[;|&]', cmd):
-                    part = part.strip()
-                    base = part.split()[0] if part.split() else ""
-                    base = base.split("/")[-1]
-                    if base and base not in ("export", "echo", "2", "head", "cut", "awk", "sed", "grep", "tr"):
-                        key_cmds.add(base)
-            cmd_list = ", ".join(sorted(key_cmds)[:8])
-            session_info = f"{len(ip_sessions)} session{'s' if len(ip_sessions) != 1 else ''}"
-            prompt = f"""SSH honeypot attacker summary. Explain what they did and WHY it matters. Be technical and specific.
 
-Attacker: 249 attempts, 2 sessions, 84 commands. Ran: cat, dmidecode, free, lscpu, lspci, nproc, uname. From: Netherlands, DigitalOcean.
-\u2192 Persistent scanner from a cloud VPS. Full hardware audit (CPU, GPU, RAM, PCI devices) \u2014 profiling this box for cryptomining potential. 249 attempts shows automated tooling.
+        cached_story = _cache_get(desc_cache, cache_key) if cache_key in desc_cache else None
+        story = None
 
-Attacker: 12 attempts, 1 session, 3 commands. Ran: wget, chmod, bash. From: China, Alibaba Cloud.
-\u2192 Smash-and-grab: downloaded a remote script and executed it immediately. Likely deploying a cryptominer or botnet agent. No recon, straight to payload delivery.
+        if cached_story:
+            is_valid, _reason = validate_llm_output(cached_story, max_chars=200)
+            if is_valid and '**' not in cached_story and not any(
+                cached_story.lower().startswith(p) for p in ["attacker:", "the attacker", "based on"]
+            ):
+                story = cached_story
+                print(f"    Using cached description (valid)")
+            else:
+                print(f"    Cached description failed validation ({_reason}), regenerating")
+                del desc_cache[cache_key]
 
-Attacker: 75 attempts, 0 sessions, 0 commands. Credentials tried: ubuntu:temponly, slurm:111111, servidor:111111. From: Germany, Hetzner.
-\u2192 Pure credential brute-forcer. 75 attempts with service-specific passwords (slurm = HPC clusters, servidor = Portuguese for server). Scanning for misconfigured compute nodes.
+        if story is None:
+            profile_text = build_profile_text(ip, count, ip_sessions, all_cmds, creds)
+            prompt_template = _CATEGORY_PROMPTS.get(category, PROMPT_BOMBER)
+            prompt = prompt_template.replace("{profile}", profile_text)
 
-Attacker: {count} attempts, {session_info}, {len(all_cmds)} commands. Ran: {cmd_list}. Creds: {creds_str}. From: {country}, {isp}.
-\u2192"""
-            story = llm_generate(prompt, temperature=0.7, max_tokens=60)
-            if not story or any(story.lower().startswith(p) for p in ["here", "i can", "we ", "okay", "the attacker", "this command", "this is", "let me", "it looks", "the user"]):
-                story = classify_commands_fast(all_cmds, ip)
-            if not story:
-                story = "Got in, poked around, ran some commands."
-            desc_cache[cache_key] = story
-        else:
-            cred_list = creds[:8]
-            cred_types = []
-            for c in cred_list:
-                if "/" in c:
-                    u = c.split("/")[0]
-                    if u in ("root", "admin", "administrator"): cred_types.append("admin")
-                    elif u in ("ubuntu", "debian", "centos"): cred_types.append("linux-default")
-                    elif u in ("solana", "sol", "validator"): cred_types.append("crypto")
-                    elif u in ("oracle", "postgres", "mysql", "redis"): cred_types.append("database")
-                    elif u in ("git", "deploy", "jenkins", "docker"): cred_types.append("devops")
-            cred_types = list(set(cred_types))
-            type_str = ", ".join(cred_types[:3]) if cred_types else "mixed"
-            story = f"Brute-force scanner ({type_str} credentials). {count} attempts with combos like {creds_str}. Never breached."
-            desc_cache[cache_key] = story
+            print(f"    Generating with {category} prompt...")
+            raw = llm_generate(prompt, temperature=0.6, max_tokens=60)
+            story = strip_markdown(raw)
+            story = re.sub(r'^[\u2192\u279c>]+\s*', '', story).strip()
+
+            # Quality gate — _bad_starts now consolidated into _BAD_PREFIXES (M1 fix)
+            is_valid, reason = validate_llm_output(story, max_chars=200)
+            if not is_valid:
+                print(f"    First attempt failed ({reason}), retrying...")
+                raw = llm_generate(prompt, temperature=0.4, max_tokens=60)
+                story = strip_markdown(raw)
+                story = re.sub(r'^[\u2192\u279c>]+\s*', '', story).strip()
+                is_valid, reason = validate_llm_output(story, max_chars=200)
+
+            if not is_valid:
+                print(f"    LLM failed twice, using {category} fallback")
+                exotic_pws = [c for c in set(creds) if c not in BORING_CREDS]
+                pw_samples = []
+                for c in exotic_pws[:3]:
+                    sep = ":" if ":" in c else "/"
+                    pw_samples.append(c.split(sep)[-1])
+
+                fallback_data = {
+                    'attempt_count': count,
+                    'session_count': total_sessions,
+                    'login_count': len(ip_sessions),
+                    'key_actions': ', '.join(unique_cmds[:5]) if unique_cmds else 'recon',
+                    'notable_passwords': ', '.join(pw_samples) if pw_samples else '',
+                    'top_cred': creds[0] if creds else 'default creds',
+                    'got_in': len(ip_sessions) > 0,
+                }
+                story = _category_fallback(category, fallback_data)
+
+            if story:
+                desc_cache[cache_key] = story
+                print(f"    Cached: {story[:80]}...")
+
+        # Final cleanup
         if story:
             for prefix in [f"Nickname: {nick}", f"{nick}:", f'"{nick}"', f"**{nick}**"]:
                 if story.lower().startswith(prefix.lower()):
@@ -822,37 +1327,33 @@ Attacker: {count} attempts, {session_info}, {len(all_cmds)} commands. Ran: {cmd_
             if " Or:" in story or " Or," in story:
                 story = story.split(" Or:")[0].split(" Or,")[0].strip()
             story = story.strip('"').strip()
-            sentences = story.split('. ')
-            if len(sentences) > 2:
-                story = '. '.join(sentences[:2]) + '.'
             if len(story) > 200:
                 story = story[:197].rsplit(" ", 1)[0] + "..."
-        if not story:
-            story = f"Knocked {count} times from {country}. {'Got in and ran recon.' if all_cmds else 'Never made it past the door.'}"
 
-        first = data.get("ip_first_seen", {}).get(ip, "")
-        last = data.get("ip_last_seen", {}).get(ip, "")
-        if first and last:
+        if not story:
+            if all_cmds:
+                story = f"Gained access and executed {len(all_cmds)} commands."
+            else:
+                story = f"Attempted {count} logins without gaining access."
+
+        # Time range
+        time_range = ""
+        if first_seen and last_seen:
             try:
-                f_utc = datetime.fromisoformat(first.replace("Z", "+00:00")[:26]).replace(tzinfo=timezone.utc)
-                l_utc = datetime.fromisoformat(last.replace("Z", "+00:00")[:26]).replace(tzinfo=timezone.utc)
+                f_utc = datetime.fromisoformat(first_seen.replace("Z", "+00:00")[:26]).replace(tzinfo=timezone.utc)
+                l_utc = datetime.fromisoformat(last_seen.replace("Z", "+00:00")[:26]).replace(tzinfo=timezone.utc)
                 f_local = f_utc.astimezone(ZoneInfo("America/New_York"))
                 l_local = l_utc.astimezone(ZoneInfo("America/New_York"))
                 f_short = f_local.strftime("%H:%M")
                 l_short = l_local.strftime("%H:%M")
                 f_date = f_local.strftime("%Y-%m-%d")
                 l_date = l_local.strftime("%Y-%m-%d")
+                if f_date == l_date:
+                    time_range = f"{f_short}\u2013{l_short}"
+                else:
+                    time_range = f"{f_date[5:]} {f_short} \u2013 {l_date[5:]} {l_short}"
             except (ValueError, TypeError):
-                f_short = first[11:16]
-                l_short = last[11:16]
-                f_date = first[:10]
-                l_date = last[:10]
-            if f_date == l_date:
-                time_range = f"{f_short}\u2013{l_short}"
-            else:
-                time_range = f"{f_date[5:]} {f_short} \u2013 {l_date[5:]} {l_short}"
-        else:
-            time_range = ""
+                time_range = ""
 
         hits.append({
             "nick": nick,
@@ -865,91 +1366,23 @@ Attacker: {count} attempts, {session_info}, {len(all_cmds)} commands. Ran: {cmd_
             "time_range": time_range,
         })
 
-    save_cache(desc_cache)
+    if _owns_cache:
+        save_cache(desc_cache)
     return hits
 
 
-def classify_commands_fast(cmds, ip=None):
-    """Quick pattern-match for common attacker behaviors.
-    M5 fix: seed random with IP hash for deterministic choices."""
-    # Seed with IP for deterministic output per-attacker
-    rng = random.Random(hash(ip) if ip else 0)
-    cmd_str = " ".join(cmds).lower()
-    if not cmds:
-        return rng.choice([
-            "Logged in, looked around, got bored, left.",
-            "Opened the door, peeked inside, closed it again.",
-            "Connected and immediately lost interest.",
-        ])
-    
-    patterns = [
-        (["uname", "/proc/cpuinfo", "nproc"], [
-            "Fingerprinting the system \u2014 checking OS, CPU, and hardware specs.",
-            "Casing the joint: pulled system info to see what they're working with.",
-            "Standard recon script \u2014 uname, CPU count, the usual checklist.",
-            "Ran the attacker's equivalent of kicking the tires.",
-            "Checking under the hood \u2014 OS version, architecture, processor count.",
-            "First thing they did? See if the hardware's worth compromising.",
-            "Automated fingerprinting \u2014 this box got sized up in seconds.",
-            "The digital equivalent of reading the label before opening the package.",
-        ]),
-        (["wget http", "curl http", "chmod +x", "./"], [
-            "Downloaded and attempted to execute a remote payload.",
-            "Pulled a binary from the internet and tried to run it. Classic.",
-            "Fetch, chmod, execute \u2014 the attacker speedrun trifecta.",
-            "Tried to download and run something nasty from a remote server.",
-        ]),
-        (["cat /etc/passwd", "cat /etc/shadow"], [
-            "Went straight for the credential files.",
-            "Trying to harvest usernames and password hashes.",
-            "Raiding /etc/passwd \u2014 hunting for accounts to crack.",
-        ]),
-        (["crontab", "systemctl", "/etc/init.d"], [
-            "Attempting to set up persistence via scheduled tasks.",
-            "Trying to plant a backdoor that survives reboot.",
-            "Looking for ways to make their access permanent.",
-        ]),
-        (["history", ".bash_history"], [
-            "Snooping through command history for credentials or clues.",
-            "Reading the previous tenant's diary \u2014 checking bash history.",
-        ]),
-        (["ifconfig", "ip addr", "hostname"], [
-            "Network recon \u2014 mapping the local network layout.",
-            "Checking what network this box sits on.",
-        ]),
-        (["iptables", "firewall"], [
-            "Poking at firewall rules.",
-            "Trying to mess with the network security config.",
-        ]),
-        (["find /", "locate"], [
-            "Searching the filesystem for interesting files.",
-            "Rummaging through directories looking for loot.",
-        ]),
-        (["ssh ", "scp "], [
-            "Attempting to pivot to other machines on the network.",
-            "Trying to use this box as a springboard to reach other hosts.",
-        ]),
-    ]
-    
-    for keywords, explanations in patterns:
-        if any(kw in cmd_str for kw in keywords):
-            return rng.choice(explanations)
-    
-    if len(cmds) <= 2 and all(len(c) < 30 for c in cmds):
-        return rng.choice([
-            "Quick recon \u2014 peeked around and left.",
-            "Brief visit. Ran a command or two and bounced.",
-            "In and out in seconds. Just checking if anyone's home.",
-        ])
-    
-    return None
+# H2 fix: classify_commands_fast removed — dead code, superseded by the
+# classify_attacker + _CATEGORY_PROMPTS prompt routing system (Bea review 2026-03-22).
 
 
-def generate_attacker_narratives(data):
-    """Generate ONE narrative per attacker IP, grouping all sessions and deduplicating commands."""
+def generate_attacker_narratives(data, desc_cache=None):
+    """Generate ONE narrative per attacker IP, grouping all sessions and deduplicating commands.
+    H1/H3 fix: accepts shared desc_cache from caller; if None, loads own copy."""
     geo_cache = data.get("geo_cache", {})
     ip_creds_map = data.get("ip_creds", {})
-    desc_cache = load_cache()
+    _owns_cache = desc_cache is None
+    if _owns_cache:
+        desc_cache = load_cache()
 
     # Group successful sessions by IP
     ip_sessions = defaultdict(list)
@@ -1006,8 +1439,17 @@ def generate_attacker_narratives(data):
 
         cached = _cache_get(desc_cache, cache_key)
         if cached:
-            narrative = cached
+            is_valid, _reason = validate_llm_output(cached, max_chars=350)
+            if is_valid and '**' not in cached:
+                narrative = cached
+            else:
+                print(f"[*] Cached narrative for {cache_key} failed validation, regenerating")
+                narrative = None
+                if cache_key in desc_cache:
+                    del desc_cache[cache_key]
         else:
+            narrative = None
+        if narrative is None:
             # Build the narrative
             # For simple cases (all same command), use a template
             if unique_cmd_count == 0:
@@ -1079,14 +1521,13 @@ def generate_attacker_narratives(data):
                         "Arrow-chain summary:"
                     )
                     narrative = llm_generate(prompt, temperature=0.5, max_tokens=80)
+                    narrative = strip_markdown(narrative)
+                    # Strip leading arrow from prompt format
+                    narrative = re.sub(r'^[\u2192\u2192]\s*', '', narrative).strip()
 
-                    # Validate
-                    if not narrative or len(narrative) < 10 or any(
-                        narrative.lower().startswith(p) for p in [
-                            "here", "i can", "we ", "okay", "the attacker",
-                            "this is", "let me", "sure", "**"
-                        ]
-                    ):
+                    # Validate — inline bad-starts consolidated into _BAD_PREFIXES (M1 fix)
+                    is_valid, reason = validate_llm_output(narrative)
+                    if not is_valid or len(narrative) < 10:
                         narrative = None
 
                 if not narrative:
@@ -1128,7 +1569,8 @@ def generate_attacker_narratives(data):
             "last_ts": last_ts,
         })
 
-    save_cache(desc_cache)
+    if _owns_cache:
+        save_cache(desc_cache)
     return results
 
 
@@ -1138,6 +1580,13 @@ def generate_attacker_narratives(data):
 def generate_html(data):
     stats = data["stats"]
     today = data["today_stats"]
+    last_24h = data.get("last_24h", {})
+    peak_sessions = data.get("peak_sessions", (0, "—"))
+    peak_logins = data.get("peak_logins", (0, "—"))
+    peak_successful = data.get("peak_successful", (0, "—"))
+    peak_commands = data.get("peak_commands", (0, "—"))
+    peak_ips = data.get("peak_ips", (0, "—"))
+    peak_success_rate = data.get("peak_success_rate", (0, "—"))
     geo_cache = data.get("geo_cache", {})
     ip_creds = data.get("ip_creds", {})
     markers_json = json.dumps(data["markers"])
@@ -1147,8 +1596,12 @@ def generate_html(data):
     timeline_labels = json.dumps(data["timeline_labels"])
     timeline_data = json.dumps(data["timeline_data"])
 
+    # H1/H3 fix: load cache once, share between both LLM generation passes, save once at end
+    print("[*] Loading description cache...")
+    shared_desc_cache = load_cache()
+
     print("[*] Generating greatest hits (LLM)...")
-    greatest_hits = generate_greatest_hits(data)
+    greatest_hits = generate_greatest_hits(data, desc_cache=shared_desc_cache)
     greatest_hits_html = ""
     for hit in greatest_hits:
         greatest_hits_html += f"""
@@ -1162,7 +1615,10 @@ def generate_html(data):
         greatest_hits_html = '<div style="color:#666;">No attackers to profile yet.</div>'
 
     print("[*] Generating attacker narratives...")
-    attacker_narratives = generate_attacker_narratives(data)
+    attacker_narratives = generate_attacker_narratives(data, desc_cache=shared_desc_cache)
+
+    # Save merged cache once after both passes complete
+    save_cache(shared_desc_cache)
 
     leaderboard_rows = ""
     for i, a in enumerate(data["top_attackers"], 1):
@@ -1176,21 +1632,39 @@ def generate_html(data):
         </tr>"""
 
     activity_rows = ""
+    prev_ip = None
     for ev in reversed(data["recent_events"]):
         try:
             dt_ev = datetime.fromisoformat(ev["ts"].replace("Z", "+00:00"))
             ts_short = dt_ev.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, AttributeError):
             ts_short = ev["ts"][:19].replace("T", " ") if ev["ts"] else "?"
+        # Show time range for grouped events
+        count = ev.get("count", 1)
+        if count > 1:
+            try:
+                first_dt = datetime.fromisoformat(ev["first_ts"].replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+                last_dt = datetime.fromisoformat(ev["last_ts"].replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+                if first_dt.date() == last_dt.date():
+                    ts_short = f"{first_dt.strftime('%H:%M')} – {last_dt.strftime('%H:%M')}"
+                else:
+                    ts_short = f"{first_dt.strftime('%m-%d %H:%M')} – {last_dt.strftime('%m-%d %H:%M')}"
+            except (ValueError, AttributeError):
+                pass
+        count_badge = f'<span class="count-badge">{count}×</span> ' if count > 1 else ""
         action_class = "success-text" if "SUCCESS" in ev["action"] else ""
         geo = geo_cache.get(ev['ip'], {})
         nick = generate_nickname(ev['ip'], geo, ip_creds.get(ev['ip'], []))
+        # Suppress repeated IPs
+        show_ip = ev["ip"] if ev["ip"] != prev_ip else "↑"
+        prev_ip = ev["ip"]
+        # Action already html-escaped at creation time — no double-escape
         activity_rows += f"""
         <div class="activity-row">
             <span class="ts">{ts_short}</span>
             <span class="nick-link" onclick="flyToAttacker(&quot;{nick}&quot;)">{nick}</span>
-            <span class="ip">{ev['ip']}</span>
-            <span class="action {action_class}">{h(ev['action'])}</span>
+            <span class="ip">{show_ip}</span>
+            <span class="action {action_class}">{count_badge}{ev['action']}</span>
         </div>"""
 
     terminal_content = ""
@@ -1228,8 +1702,8 @@ def generate_html(data):
                 for dc in atk["display_cmds"]:
                     count_badge = f' <span class="cmd-count">\u00d7{dc["count"]}</span>' if dc["count"] > 1 else ""
                     annotation = annotate_command(dc["cmd"])
-                    note_html = f' <span class="cmd-note">// {annotation}</span>' if annotation else ""
-                    terminal_content += f'<div class="cmd-line"><span class="cmd-prompt">$</span> {h(dc["cmd"])}{count_badge}{note_html}</div>'
+                    note_html = f'<div class="cmd-annotation">↳ {annotation}</div>' if annotation else ""
+                    terminal_content += f'<div class="cmd-line"><span class="cmd-prompt">$</span> {h(dc["cmd"])}{count_badge}</div>{note_html}'
                 terminal_content += '</div>'
             terminal_content += '</div></div>'
     elif data["successful_sessions"]:
@@ -1239,8 +1713,8 @@ def generate_html(data):
             terminal_content += f'<div class="term-header">\U0001f3ad {nick} ({s["ip"]})</div>'
             for cmd in s["commands"]:
                 annotation = annotate_command(cmd["cmd"])
-                note_html = f' <span class="cmd-note">// {annotation}</span>' if annotation else ""
-                terminal_content += f'<div class="term-line"><span class="term-prompt">$ </span>{h(cmd["cmd"])}{note_html}</div>'
+                note_html = f'<div class="cmd-annotation">↳ {annotation}</div>' if annotation else ""
+                terminal_content += f'<div class="term-line"><span class="term-prompt">$ </span>{h(cmd["cmd"])}</div>{note_html}'
     else:
         terminal_content = '<div class="term-line" style="color:#666;">No successful logins captured yet. The bots are still trying...</div>'
 
@@ -1540,6 +2014,10 @@ def generate_html(data):
   .activity-row:hover {{ background: #111a11; }}
   .activity-row .ts {{ color: #444; min-width: 150px; font-size: 0.9em; }}
   .activity-row .ip {{ color: #ff6b6b; min-width: 130px; }}
+  .count-badge {{
+    background: #ff6b35; color: #000; padding: 1px 6px;
+    border-radius: 8px; font-size: 0.8em; font-weight: bold;
+  }}
   .activity-row .action {{ color: #aaa; flex: 1; min-width: 0; max-height: 80px; overflow-y: auto; overflow-x: hidden; word-break: break-all; white-space: pre-wrap; }}
   .activity-row .action::-webkit-scrollbar {{ width: 4px; }}
   .activity-row .action::-webkit-scrollbar-track {{ background: #0a0a0a; }}
@@ -1688,10 +2166,22 @@ def generate_html(data):
     line-height: 1.5;
   }}
   .session-cmds .cmd-line {{
-    margin: 1px 0;
+    margin: 2px 0;
+    overflow-wrap: break-word;
+    word-break: break-all;
+    white-space: pre-wrap;
   }}
   .session-cmds .cmd-prompt {{
     color: #888;
+  }}
+  .cmd-annotation {{
+    display: block;
+    color: #0a8;
+    font-style: italic;
+    font-size: 0.82em;
+    opacity: 0.8;
+    margin-left: 18px;
+    margin-bottom: 2px;
   }}
 </style>
 </head>
@@ -1783,13 +2273,18 @@ def generate_html(data):
   <div class="grid full">
     <div class="panel">
       <h2>\U0001f4ca All-Time Stats</h2>
-      <div class="alltime-bar" style="background:transparent;border:none;padding:0;">
-        <div class="alltime-stat"><div class="alltime-value">{data['attacks_per_day']}</div><div class="alltime-label">Attacks / Day</div></div>
-        <div class="alltime-stat"><div class="alltime-value">{data['unique_countries']}</div><div class="alltime-label">Countries Seen</div></div>
-        <div class="alltime-stat"><div class="alltime-value">{data['peak_hour']}</div><div class="alltime-label">Peak Hour (ET)</div></div>
-        <div class="alltime-stat"><div class="alltime-value">{data['busiest_day'][0][5:] if data['busiest_day'][0] else '\u2014'}</div><div class="alltime-label">Busiest Day ({data['busiest_day'][1]} attempts)</div></div>
+      <div style="overflow-x:auto;">
+        <table>
+          <tr><th>Metric</th><th>Total</th><th>Avg / Day</th><th>Last 24h</th><th>Peak Day</th></tr>
+          <tr><td>Sessions</td><td class="glow">{stats['total_sessions']:,}</td><td>{data['averages']['sessions_per_day']}</td><td>{last_24h.get('sessions', 0):,}</td><td>{peak_sessions[0]:,} ({peak_sessions[1]})</td></tr>
+          <tr><td>Login Attempts</td><td class="glow">{stats['total_login_attempts']:,}</td><td>{data['averages']['logins_per_day']}</td><td>{last_24h.get('login_attempts', 0):,}</td><td>{peak_logins[0]:,} ({peak_logins[1]})</td></tr>
+          <tr><td>Successful Logins</td><td class="glow">{stats['successful_logins']:,}</td><td>{data['averages']['successful_per_day']}</td><td>{last_24h.get('successful_logins', 0):,}</td><td>{peak_successful[0]:,} ({peak_successful[1]})</td></tr>
+          <tr><td>Unique IPs</td><td class="glow">{stats['unique_ips']:,}</td><td>{data['averages']['ips_per_day']}</td><td>{last_24h.get('unique_ips', 0):,}</td><td>{peak_ips[0]:,} ({peak_ips[1]})</td></tr>
+          <tr><td>Commands Executed</td><td class="glow">{stats['commands_executed']:,}</td><td>{data['averages']['commands_per_day']}</td><td>{last_24h.get('commands', 0):,}</td><td>{peak_commands[0]:,} ({peak_commands[1]})</td></tr>
+          <tr><td>Success Rate</td><td class="glow">{data['averages']['success_rate']}%</td><td>{round(data['averages']['success_rate'], 1)}%</td><td>{round(last_24h.get('successful_logins', 0) / max(1, last_24h.get('login_attempts', 1)) * 100, 1)}%</td><td>{peak_success_rate[0]}% ({peak_success_rate[1]})</td></tr>
+          <tr><td>Days Active</td><td class="glow" colspan="4">{data['days_active']}</td></tr>
+        </table>
       </div>
-      <div style="text-align:center;color:#444;font-size:0.7em;margin-top:8px;">{stats['total_login_attempts']:,} total attempts across {data['days_active']} days \u00b7 {data['averages']['success_rate']}% success rate</div>
     </div>
   </div>
 
