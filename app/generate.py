@@ -112,12 +112,8 @@ LOCALE = {
     "command_prefix": "命令:",
     "file_prefix": "文件:",
 
-    # serve.py 加载页
-    "loading_title": "仪表盘生成中...",
-    "loading_msg": "首次运行 LLM 生成需要几分钟，请稍后刷新。",
-
-    # 日期月份缩写（JavaScript 用）
-    "months_js": "['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']",
+    # 日期月份缩写（JavaScript 用，渲染时通过 json.dumps 转换）
+    "months": ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"],
 
     # 量词/单位（greatest_hits 卡片）
     "unit_attempts": " 次尝试",
@@ -443,7 +439,12 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
 
 # LLM_PROVIDER: "ollama"（默认）、"openai"（OpenAI 兼容 API）、"none"（禁用 LLM）
+_LLM_VALID_PROVIDERS = {"ollama", "openai", "none"}
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
+if LLM_PROVIDER not in _LLM_VALID_PROVIDERS:
+    print(f"[!] Unknown LLM_PROVIDER={LLM_PROVIDER!r}, falling back to 'none'. "
+          f"Valid options: {', '.join(sorted(_LLM_VALID_PROVIDERS))}")
+    LLM_PROVIDER = "none"
 
 # OpenAI 兼容 API 配置（仅 LLM_PROVIDER=openai 时生效）
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
@@ -1345,7 +1346,7 @@ def llm_generate(prompt, model=None, temperature=0.5, max_tokens=30):
             )
             resp = urllib.request.urlopen(req, timeout=300)
             return json.loads(resp.read()).get("response", "").strip()
-        else:
+        elif LLM_PROVIDER == "openai":
             # OpenAI 兼容 API 格式
             payload = json.dumps({
                 "model": model or LLM_MODEL,
@@ -1364,6 +1365,8 @@ def llm_generate(prompt, model=None, temperature=0.5, max_tokens=30):
             resp = urllib.request.urlopen(req, timeout=300)
             data = json.loads(resp.read())
             return data["choices"][0]["message"]["content"].strip()
+        else:
+            return ""
     except Exception as e:
         print(f"[!] LLM generation failed: {e}")
         return ""
@@ -2585,7 +2588,7 @@ def generate_html(data):
   }}
 
   function fmtDate(d) {{
-    var months = {LOCALE['months_js']};
+    var months = {json.dumps(LOCALE['months'], ensure_ascii=False)};
     return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
   }}
 
