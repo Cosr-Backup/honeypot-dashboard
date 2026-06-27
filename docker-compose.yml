@@ -16,6 +16,8 @@ services:
     build: .
     image: honeypot-dashboard:latest
     container_name: honeypot-dashboard
+    env_file:
+      - .env
     network_mode: host
     # Container runs as non-root uid 10001 (see Dockerfile). Add the host's
     # 'cowrie' group (gid 988) as a supplementary group so it can read the

@@ -22,3 +22,6 @@ dashboard.html
 .pytest_cache/
 test-results/
 .venv/
+.omc/
+.claude/
+docs/superpowers/
