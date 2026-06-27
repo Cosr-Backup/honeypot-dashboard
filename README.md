@@ -1,10 +1,12 @@
 # 🍯 Honeypot Dashboard
 
+> **[中文文档 / Chinese Documentation →](README.zh-CN.md)**
+
 A **Cowrie SSH honeypot** disguised as a Solana validator node, with a live web dashboard showing real-time attacker sessions, geolocation, and LLM-generated behavior descriptions.
 
 ![Python 3](https://img.shields.io/badge/python-3.10+-blue)
 ![Cowrie](https://img.shields.io/badge/honeypot-cowrie-orange)
-![Ollama](https://img.shields.io/badge/LLM-ollama-green)
+![LLM](https://img.shields.io/badge/LLM-Ollama%20%7C%20OpenAI-green)
 
 ## What It Does
 
@@ -13,7 +15,7 @@ This project runs an SSH honeypot that masquerades as a misconfigured Solana val
 - **Live attack map** — Geographic visualization of attacker origins using Leaflet.js
 - **Attacker leaderboard** — Top attackers ranked by attempts, with nicknames and ISP info
 - **Session replays** — What attackers typed after logging in, with command annotations
-- **LLM-generated descriptions** — Natural language summaries of attacker behavior (e.g., "Full hardware audit — profiling this box for cryptomining potential")
+- **LLM-generated descriptions** — Natural language summaries of attacker behavior via Ollama or any OpenAI-compatible API
 - **Credential analytics** — Most common username/password combinations tried
 - **Daily breakdowns** — Session counts, unique IPs, and success rates over time
 
@@ -55,7 +57,7 @@ This disguise is effective — many attackers specifically try Solana-related cr
 ## Key Features
 
 ### Session Intelligence
-- **3-layer description system:** Dictionary lookup → regex pattern matching → LLM generation (via Ollama)
+- **3-layer description system:** Dictionary lookup → regex pattern matching → LLM generation (via Ollama or OpenAI-compatible API)
 - **Attacker nicknames:** Country-themed names (e.g., `tulip_sol`, `dragon_root`) based on origin and behavior
 - **Command annotations:** Inline technical notes on what each command does and why an attacker would run it
 - **Description caching:** LLM descriptions are cached to avoid redundant inference
@@ -68,7 +70,7 @@ This disguise is effective — many attackers specifically try Solana-related cr
 - **Session deduplication** — Events are deduped by (session, timestamp, eventid)
 - **7-day rolling window** — Dashboard shows recent activity, not all-time data
 - **30-day data retention** — Analytics pruning prevents unbounded disk growth
-- **Ollama health checks** — Gracefully skips LLM descriptions if Ollama is down; uses cached/pattern-matched descriptions instead
+- **LLM health checks** — Gracefully skips LLM descriptions if the LLM provider is down; uses cached/pattern-matched descriptions instead
 
 ### Security Hardening
 - **XSS prevention** — All attacker-controlled data (usernames, passwords, commands, ISP names) is HTML-escaped before rendering
@@ -117,7 +119,7 @@ honeypot-dashboard/
 - Docker + Docker Compose (recommended) — or Python 3.12+ for a bare-metal run
   (the dashboard uses 3.12-only f-string syntax and will not parse on 3.10/3.11)
 - [Cowrie](https://github.com/cowrie/cowrie) SSH/Telnet honeypot
-- [Ollama](https://ollama.ai/) with a small model (e.g., `qwen3.5:9b`) — optional but recommended
+- LLM backend (optional but recommended): [Ollama](https://ollama.ai/) locally, or any OpenAI-compatible API (OpenAI, DeepSeek, OpenRouter, etc.)
 - nginx with Let's Encrypt for TLS
 
 > The dashboard itself runs in a container (see **Run with Docker** below).
@@ -160,7 +162,10 @@ git clone https://github.com/brezgis/honeypot-dashboard.git /home/dashboard
 
 # Install Ollama (optional, for LLM descriptions)
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:4b  # or any small model
+ollama pull qwen3.5:9b  # or any small model
+
+# Or use an OpenAI-compatible API instead — set LLM_PROVIDER=openai in .env
+# See .env.example for full configuration options
 
 # The dashboard reads logs from Cowrie's default location:
 #   /home/cowrie/cowrie/var/log/cowrie/cowrie.json
@@ -277,7 +282,12 @@ All set in `docker-compose.yml`; the same variables work for a bare-metal run.
 |----------|---------|-------------|
 | `COWRIE_LOG_PATH` | `/home/cowrie/cowrie/var/log/cowrie/cowrie.json` | Cowrie JSON log location (`/cowrie-logs/cowrie.json` in-container) |
 | `HONEYPOT_DATA_DIR` | next to the scripts | Where caches, `analytics.json`, and `dashboard.html` are written (`/data` in-container) |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint for LLM descriptions |
+| `LLM_PROVIDER` | `ollama` | LLM backend: `ollama` / `openai` / `none` |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint (when `LLM_PROVIDER=ollama`) |
+| `OLLAMA_MODEL` | `qwen3.5:9b` | Ollama model name |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API base URL (when `LLM_PROVIDER=openai`) |
+| `OPENAI_API_KEY` | *(empty)* | API key for OpenAI-compatible providers |
+| `OPENAI_MODEL` | `gpt-4.1-mini` | Model name for OpenAI-compatible providers |
 | `SERVE_HOST` | `127.0.0.1` | Address `serve.py` binds (set `0.0.0.0` for bridge networking) |
 | `SERVE_PORT` | `9999` | HTTP server port |
 | `REGEN_INTERVAL` | `300` | Seconds between dashboard/analytics regenerations |
@@ -331,13 +341,6 @@ A few non-env settings live at the top of each script:
 | `MIN_REGEN_INTERVAL` | `serve.py` | `30` | Minimum seconds between on-demand regenerations |
 | `RETENTION_DAYS` | `analytics.py` | `30` | Days to keep analytics data before pruning |
 
-### LLM Model
-
-The LLM model is specified in `generate.py`'s `llm_generate()` function (`qwen3.5:9b`).
-Any Ollama-compatible model works — smaller models are faster, larger ones produce
-better descriptions. If Ollama is unreachable, descriptions fall back to
-template/regex generation and the dashboard still renders.
-
 ### LLM 后端（支持三种模式）
 
 通过 `LLM_PROVIDER` 切换 LLM 后端：
@@ -388,7 +391,7 @@ A separate watcher script (not included in this repo) can monitor Cowrie logs in
 
 - **[Cowrie](https://github.com/cowrie/cowrie)** — SSH/Telnet honeypot framework
 - **Python 3** — Dashboard generation, HTTP serving, analytics
-- **[Ollama](https://ollama.ai/)** — Local LLM inference for session descriptions
+- **[Ollama](https://ollama.ai/)** — Local LLM inference (default), or any OpenAI-compatible API (OpenAI, DeepSeek, etc.)
 - **[Leaflet.js](https://leafletjs.com/)** — Interactive attack origin map
 - **[Chart.js](https://www.chartjs.org/)** — Credential and timeline visualizations
 - **[ip-api.com](https://ip-api.com/)** — Batch GeoIP lookups (free tier)
@@ -403,7 +406,7 @@ The description system uses a 3-layer approach for efficiency:
 
 2. **Layer 2 — Pattern matching** (instant): Regex-based classification of common attack patterns. Returns varied descriptions (8+ options per category, seeded by IP hash for deterministic output).
 
-3. **Layer 3 — LLM generation** (cached): For novel sessions that don't match known patterns, a few-shot prompt sends the session details to a local Ollama model. The response is cached in `description_cache.json`, so each unique session is only described once.
+3. **Layer 3 — LLM generation** (cached): For novel sessions that don't match known patterns, a few-shot prompt sends the session details to the configured LLM (Ollama or OpenAI-compatible). The response is cached in `description_cache.json`, so each unique session is only described once.
 
 The prompt uses a raw/few-shot format with real examples to guide the model toward concise, technical, opinionated descriptions. Bad outputs (meta-commentary, refusals, too-short responses) are detected and filtered.
 
