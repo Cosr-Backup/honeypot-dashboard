@@ -1743,17 +1743,15 @@ def generate_attacker_narratives(data, desc_cache=None):
                     cmd_block = "\n".join(cmd_summary_parts)
 
                     prompt = (
-                        "Summarize this SSH honeypot attacker's behavior as a short arrow-chain narrative. "
-                        "Use → to connect steps. Be specific and technical. No preamble, no quotes.\n\n"
-                        "Example: OS fingerprint via uname → full hardware audit (lscpu, dmidecode, free) → "
-                        "enumerated PCI devices → profiling for cryptomining potential\n\n"
-                        "Example: wget payload from C2 → chmod +x → executed binary → attempted persistence via crontab\n\n"
-                        f"Attacker: {nick} from {loc} ({isp})\n"
-                        f"Sessions: {len(sessions)}, Total commands: {total_cmd_executions}, "
-                        f"Unique commands: {unique_cmd_count}\n"
-                        f"Credentials: {creds_str}\n"
-                        f"Commands (deduplicated, in order):\n{cmd_block}\n\n"
-                        "Arrow-chain summary:"
+                        "用箭头链（→）简短总结这个 SSH 蜜罐攻击者的行为。每步用 → 连接，技术精确，不要前言和引号。\n\n"
+                        "示例: uname 指纹探测 → 硬件全面审计（lscpu, dmidecode, free）→ 枚举 PCI 设备 → 评估挖矿潜力\n\n"
+                        "示例: wget 下载 payload → chmod +x → 执行二进制 → 尝试 crontab 持久化\n\n"
+                        f"攻击者: {nick}，来自 {loc}（{isp}）\n"
+                        f"会话数: {len(sessions)}，总命令数: {total_cmd_executions}，"
+                        f"独立命令数: {unique_cmd_count}\n"
+                        f"凭证: {creds_str}\n"
+                        f"命令（去重后按顺序）:\n{cmd_block}\n\n"
+                        "箭头链总结:"
                     )
                     narrative = llm_generate(prompt, temperature=0.5, max_tokens=80)
                     narrative = strip_markdown(narrative)
