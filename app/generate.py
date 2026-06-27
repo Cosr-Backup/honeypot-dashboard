@@ -210,40 +210,37 @@ def validate_llm_output(text, max_chars=300):
 # Pike <pike@brezgis.com> 2026-03-22
 
 PROMPT_SOPHISTICATED = (
-    "You are a security analyst writing one-liner descriptions for a honeypot dashboard.\n"
-    "Technically precise, dry wit. The humor comes from what attackers actually do.\n\n"
-    "Rules:\n"
-    "- One sentence, under 200 characters\n"
-    "- No markdown, no backticks, no bullet points\n"
-    "- Don\'t start with \"The attacker\" or \"An attacker\"\n"
-    "- Don\'t restate metadata (country, IP, ISP)\n"
-    "- Don\'t say \"honeypot\"\n"
-    "- Lead with the most interesting technical action\n"
-    "- ONLY describe actions listed in the profile \u2014 do NOT invent additional actions\n\n"
-    "Examples:\n"
-    "- \"Chattr\'d .ssh, injected the mdrfckr key, changed root password, inventoried the hardware \u2014 methodical takeover in one session.\"\n"
-    "- \"Wrote uname -a to a shell script, chmod 777\'d it, and executed it \u2014 could\'ve just typed it, but cargo-cult habits die hard.\"\n"
-    "- \"SSH key injection followed by chattr lockdown and hardware census \u2014 this one runs a tight ship for a script kiddie.\"\n\n"
-    "Describe this attacker in one sentence:\n"
+    "你是一名安全分析师，为蜜罐仪表盘撰写一句话攻击者描述。\n"
+    "要求技术精确、风格冷峻。幽默感来自攻击者实际的行为。\n\n"
+    "规则：\n"
+    "- 一句话，不超过 200 字符\n"
+    "- 不要使用 markdown、反引号或列表\n"
+    "- 不要以\"攻击者\"开头\n"
+    "- 不要重复元数据（国家、IP、运营商）\n"
+    "- 不要提及\"蜜罐\"\n"
+    "- 以最有趣的技术行为开头\n"
+    "- 只描述 profile 中列出的行为——不要编造额外动作\n\n"
+    "示例：\n"
+    "- \"chattr 锁了 .ssh，注入 mdrfckr 公钥，改了 root 密码，还盘点了硬件——一个会话内完成的教科书式接管。\"\n"
+    "- \"把 uname -a 写进脚本，hmod 777，然后执行——明明可以直接打的，但仪式感不能少。\"\n\n"
+    "用一句话描述这个攻击者：\n"
     "{profile}"
 )
 
 PROMPT_RECON = (
-    "You are a security analyst writing one-liner descriptions for a honeypot dashboard.\n"
-    "Technically precise, dry wit.\n\n"
-    "Rules:\n"
-    "- One sentence, under 200 characters\n"
-    "- No markdown, no backticks\n"
-    "- Don\'t start with \"The attacker\"\n"
-    "- Don\'t restate metadata (country, IP, ISP)\n"
-    "- Don\'t say \"honeypot\"\n"
-    "- Highlight the repetition or futility\n\n"
-    "Examples:\n"
-    "- \"3,951 sessions of the exact same uname command with Solana creds \u2014 dedication to monotony.\"\n"
-    "- \"Showed up with validator credentials, ran uname four times, left \u2014 window-shopping for crypto nodes.\"\n"
-    "- \"172 attempts, 4 logins; massive fingerprinting script with custom separators \u2014 likely probing for honeypot signatures.\"\n"
-    "- \"Ran uname eight times with default credentials, proving they prefer repetition over reading the manual.\"\n\n"
-    "Describe this attacker in one sentence:\n"
+    "你是一名安全分析师，为蜜罐仪表盘撰写一句话攻击者描述。\n"
+    "技术精确、风格冷峻。\n\n"
+    "规则：\n"
+    "- 一句话，不超过 200 字符\n"
+    "- 不要使用 markdown、反引号\n"
+    "- 不要以\"攻击者\"开头\n"
+    "- 不要重复元数据（国家、IP、运营商）\n"
+    "- 不要提及\"蜜罐\"\n"
+    "- 突出重复行为或徒劳感\n\n"
+    "示例：\n"
+    "- \"3951 次会话跑的都是同一个 uname 命令，配着 Solana 凭证——对单调的执着令人敬佩。\"\n"
+    "- \"带着验证器凭证来了，跑了四次 uname，走了——窗口购物找加密节点。\"\n\n"
+    "用一句话描述这个攻击者：\n"
     "{profile}"
 )
 
@@ -936,9 +933,9 @@ def analyze_events(events, geo_cache):
                 pass
             key_type = e.get("type", "")
             if key_type and not p:
-                action = f"🔑 Key auth: {h(u)} ({h(key_type)})"
+                action = f"{LOCALE['key_auth']}: {h(u)} ({h(key_type)})"
             else:
-                action = f"Login attempt: {h(u)}/{h(p)}"
+                action = f"{LOCALE['login_attempt']}: {h(u)}/{h(p)}"
             recent_events.append({"ts": ts, "ip": ip, "action": action})
 
         elif eid == "cowrie.login.success":
@@ -970,21 +967,21 @@ def analyze_events(events, geo_cache):
                 hourly_attempts[dt_local.hour] += 1
             except (ValueError, AttributeError):
                 pass
-            recent_events.append({"ts": ts, "ip": ip, "action": f"\u2705 LOGIN SUCCESS: {h(u)}/{h(p)}"})
+            recent_events.append({"ts": ts, "ip": ip, "action": f"{LOCALE['login_success']}: {h(u)}/{h(p)}"})
 
         elif eid == "cowrie.command.input":
             stats["commands_executed"] += 1
             cmd = e.get("input", "")
             if session in session_success:
                 successful_sessions[session].append({"ts": ts, "cmd": cmd})
-            recent_events.append({"ts": ts, "ip": ip, "action": f"Command: {h(cmd)}"})
+            recent_events.append({"ts": ts, "ip": ip, "action": f"{LOCALE['command_prefix']} {h(cmd)}"})
             if day_key:
                 daily_commands[day_key] += 1
 
         elif eid in ("cowrie.session.file_download", "cowrie.session.file_upload"):
             stats["files_downloaded"] += 1
             url = e.get("url", e.get("filename", "?"))
-            recent_events.append({"ts": ts, "ip": ip, "action": f"File: {h(url)}"})
+            recent_events.append({"ts": ts, "ip": ip, "action": f"{LOCALE['file_prefix']} {h(url)}"})
 
     stats["unique_ips"] = len(stats["unique_ips"])
 
@@ -1771,12 +1768,12 @@ def generate_html(data):
         greatest_hits_html += f"""
         <div class="hit-card">
             <div class="hit-nick" onclick="flyToAttacker('{hit['nick']}')">{hit['flag']} {hit['nick']}</div>
-            <div class="hit-stat">{hit['count']} attempts{' \u00b7 ' + str(hit.get('sessions', 0)) + ' sessions' if hit.get('sessions') else ''}{' \u00b7 ' + str(hit['cmds']) + ' cmds' if hit['cmds'] else ''}</div>
+            <div class="hit-stat">{hit['count']}{LOCALE['unit_attempts']}{' \u00b7 ' + str(hit.get('sessions', 0)) + LOCALE['unit_sessions'] if hit.get('sessions') else ''}{' \u00b7 ' + str(hit['cmds']) + LOCALE['unit_cmds'] if hit['cmds'] else ''}</div>
             <div class="hit-story">{h(hit['story'])}</div>
             <div style="color:#555;font-size:0.75em;margin-top:4px;">\u23f0 {hit['time_range']}</div>
         </div>"""
     if not greatest_hits_html:
-        greatest_hits_html = '<div style="color:#666;">No attackers to profile yet.</div>'
+        greatest_hits_html = f'<div style="color:#666;">{LOCALE["no_attackers"]}</div>'
 
     print("[*] Generating attacker narratives...")
     attacker_narratives = generate_attacker_narratives(data, desc_cache=shared_desc_cache)
@@ -1880,7 +1877,7 @@ def generate_html(data):
                 note_html = f'<div class="cmd-annotation">↳ {annotation}</div>' if annotation else ""
                 terminal_content += f'<div class="term-line"><span class="term-prompt">$ </span>{h(cmd["cmd"])}</div>{note_html}'
     else:
-        terminal_content = '<div class="term-line" style="color:#666;">No successful logins captured yet. The bots are still trying...</div>'
+        terminal_content = f'<div class="term-line" style="color:#666;">{LOCALE["no_successful_logins"]}</div>'
 
     daily_rows = ""
     for d in data["daily_breakdown"]:
@@ -1897,11 +1894,11 @@ def generate_html(data):
         </tr>"""
 
     html = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="{LOCALE['lang']}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Honeypot Dashboard</title>
+<title>{LOCALE['page_title']}</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍯</text></svg>">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -2354,16 +2351,16 @@ def generate_html(data):
 <div class="scanline"></div>
 
 <header>
-  <h1>\U0001f36f HONEYPOT DASHBOARD</h1>
-  <div class="subtitle">COWRIE SSH HONEYPOT // LIVE ATTACKER INTELLIGENCE // Generated: {data['generated']}</div>
+  <h1>{LOCALE['header_title']}</h1>
+  <div class="subtitle">{LOCALE['header_subtitle'].format(generated=data['generated'])}</div>
 </header>
 
 <div class="stats-bar">
-  <div class="stat"><div class="value">{today['sessions']}</div><div class="label">Sessions Today</div></div>
-  <div class="stat"><div class="value">{today['login_attempts']}</div><div class="label">Login Attempts Today</div></div>
-  <div class="stat"><div class="value">{today['successful_logins']}</div><div class="label">Successful Logins Today</div></div>
-  <div class="stat"><div class="value">{today['unique_ips']}</div><div class="label">Unique IPs Today</div></div>
-  <div class="stat"><div class="value">{today['commands']}</div><div class="label">Commands Today</div></div>
+  <div class="stat"><div class="value">{today['sessions']}</div><div class="label">{LOCALE['sessions_today']}</div></div>
+  <div class="stat"><div class="value">{today['login_attempts']}</div><div class="label">{LOCALE['login_attempts_today']}</div></div>
+  <div class="stat"><div class="value">{today['successful_logins']}</div><div class="label">{LOCALE['successful_logins_today']}</div></div>
+  <div class="stat"><div class="value">{today['unique_ips']}</div><div class="label">{LOCALE['unique_ips_today']}</div></div>
+  <div class="stat"><div class="value">{today['commands']}</div><div class="label">{LOCALE['commands_today']}</div></div>
 </div>
 
 
@@ -2372,7 +2369,7 @@ def generate_html(data):
   <div class="grid full">
     <div class="panel" style="overflow:visible;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;">
-        <h2 style="margin-bottom:0;">\U0001f30d Attack Origins</h2>
+        <h2 style="margin-bottom:0;">{LOCALE['attack_origins']}</h2>
         <div style="display:flex;align-items:center;gap:10px;">
           <button onclick="changeWeek(-1)" id="weekPrev" style="background:none;border:1px solid #333;color:#888;font-size:1.2em;cursor:pointer;padding:4px 10px;border-radius:4px;font-family:monospace;">&larr;</button>
           <span id="weekLabel" style="color:#888;font-size:0.85em;font-family:'JetBrains Mono',monospace;min-width:140px;text-align:center;"></span>
@@ -2385,16 +2382,16 @@ def generate_html(data):
 
   <div class="grid">
     <div class="panel">
-      <h2>\U0001f3c6 Top Attackers</h2>
+      <h2>{LOCALE['top_attackers']}</h2>
       <div style="max-height:350px; overflow-y:auto;">
         <table>
-          <tr><th>Attacker</th><th>Origin</th><th class="hide-mobile">ISP</th><th>Attempts</th></tr>
+          <tr><th>{LOCALE['th_attacker']}</th><th>{LOCALE['th_origin']}</th><th class="hide-mobile">{LOCALE['th_isp']}</th><th>{LOCALE['th_attempts']}</th></tr>
           {leaderboard_rows}
         </table>
       </div>
     </div>
     <div class="panel">
-      <h2>\U0001f4e1 Recent Activity</h2>
+      <h2>{LOCALE['recent_activity']}</h2>
       <div class="activity-feed">
         {activity_rows}
       </div>
@@ -2403,7 +2400,7 @@ def generate_html(data):
 
   <div class="grid full">
     <div class="panel">
-      <h2>\U0001f3ac Greatest Hits</h2>
+      <h2>{LOCALE['greatest_hits']}</h2>
       <div class="greatest-hits">
         {greatest_hits_html}
       </div>
@@ -2412,11 +2409,11 @@ def generate_html(data):
 
   <div class="grid">
     <div class="panel">
-      <h2>\U0001f511 Top Credentials</h2>
+      <h2>{LOCALE['top_credentials']}</h2>
       <canvas id="credsChart"></canvas>
     </div>
     <div class="panel">
-      <h2 style="margin-bottom:0;">\U0001f4c8 Attack Timeline</h2>
+      <h2 style="margin-bottom:0;">{LOCALE['attack_timeline']}</h2>
       <div id="timelineWeekLabel" style="color:#888;font-size:0.75em;margin-bottom:10px;font-family:'JetBrains Mono',monospace;"></div>
       <canvas id="timelineChart"></canvas>
     </div>
@@ -2424,10 +2421,10 @@ def generate_html(data):
 
   <div class="grid full">
     <div class="panel">
-      <h2>\U0001f4ca Daily Breakdown</h2>
+      <h2>{LOCALE['daily_breakdown']}</h2>
       <div id="dailyBreakdown" style="overflow-x:auto; max-height:400px; overflow-y:auto;">
         <table>
-          <tr><th>Date</th><th>Sessions</th><th class="hide-mobile">Login Attempts</th><th>Successful</th><th>Unique IPs</th><th class="hide-mobile">Commands</th><th class="hide-mobile">Top Attacker</th></tr>
+          <tr><th>{LOCALE['th_date']}</th><th>{LOCALE['th_sessions']}</th><th class="hide-mobile">{LOCALE['th_login_attempts']}</th><th>{LOCALE['th_successful']}</th><th>{LOCALE['th_unique_ips']}</th><th class="hide-mobile">{LOCALE['th_commands']}</th><th class="hide-mobile">{LOCALE['th_top_attacker']}</th></tr>
           {daily_rows}
         </table>
       </div>
@@ -2436,17 +2433,17 @@ def generate_html(data):
 
   <div class="grid full">
     <div class="panel">
-      <h2>\U0001f4ca All-Time Stats</h2>
+      <h2>{LOCALE['all_time_stats']}</h2>
       <div style="overflow-x:auto;">
         <table>
-          <tr><th>Metric</th><th>Total</th><th>Avg / Day</th><th>Last 24h</th><th>Peak Day</th></tr>
-          <tr><td>Sessions</td><td class="glow">{stats['total_sessions']:,}</td><td>{data['averages']['sessions_per_day']}</td><td>{last_24h.get('sessions', 0):,}</td><td>{peak_sessions[0]:,} ({peak_sessions[1]})</td></tr>
-          <tr><td>Login Attempts</td><td class="glow">{stats['total_login_attempts']:,}</td><td>{data['averages']['logins_per_day']}</td><td>{last_24h.get('login_attempts', 0):,}</td><td>{peak_logins[0]:,} ({peak_logins[1]})</td></tr>
-          <tr><td>Successful Logins</td><td class="glow">{stats['successful_logins']:,}</td><td>{data['averages']['successful_per_day']}</td><td>{last_24h.get('successful_logins', 0):,}</td><td>{peak_successful[0]:,} ({peak_successful[1]})</td></tr>
-          <tr><td>Unique IPs</td><td class="glow">{stats['unique_ips']:,}</td><td>{data['averages']['ips_per_day']}</td><td>{last_24h.get('unique_ips', 0):,}</td><td>{peak_ips[0]:,} ({peak_ips[1]})</td></tr>
-          <tr><td>Commands Executed</td><td class="glow">{stats['commands_executed']:,}</td><td>{data['averages']['commands_per_day']}</td><td>{last_24h.get('commands', 0):,}</td><td>{peak_commands[0]:,} ({peak_commands[1]})</td></tr>
-          <tr><td>Success Rate</td><td class="glow">{data['averages']['success_rate']}%</td><td>{round(data['averages']['success_rate'], 1)}%</td><td>{round(last_24h.get('successful_logins', 0) / max(1, last_24h.get('login_attempts', 1)) * 100, 1)}%</td><td>{peak_success_rate[0]}% ({peak_success_rate[1]})</td></tr>
-          <tr><td>Days Active</td><td class="glow" colspan="4">{data['days_active']}</td></tr>
+          <tr><th>{LOCALE['th_metric']}</th><th>{LOCALE['th_total']}</th><th>{LOCALE['th_avg_day']}</th><th>{LOCALE['th_last_24h']}</th><th>{LOCALE['th_peak_day']}</th></tr>
+          <tr><td>{LOCALE['metric_sessions']}</td><td class="glow">{stats['total_sessions']:,}</td><td>{data['averages']['sessions_per_day']}</td><td>{last_24h.get('sessions', 0):,}</td><td>{peak_sessions[0]:,} ({peak_sessions[1]})</td></tr>
+          <tr><td>{LOCALE['metric_login_attempts']}</td><td class="glow">{stats['total_login_attempts']:,}</td><td>{data['averages']['logins_per_day']}</td><td>{last_24h.get('login_attempts', 0):,}</td><td>{peak_logins[0]:,} ({peak_logins[1]})</td></tr>
+          <tr><td>{LOCALE['metric_successful_logins']}</td><td class="glow">{stats['successful_logins']:,}</td><td>{data['averages']['successful_per_day']}</td><td>{last_24h.get('successful_logins', 0):,}</td><td>{peak_successful[0]:,} ({peak_successful[1]})</td></tr>
+          <tr><td>{LOCALE['metric_unique_ips']}</td><td class="glow">{stats['unique_ips']:,}</td><td>{data['averages']['ips_per_day']}</td><td>{last_24h.get('unique_ips', 0):,}</td><td>{peak_ips[0]:,} ({peak_ips[1]})</td></tr>
+          <tr><td>{LOCALE['metric_commands_executed']}</td><td class="glow">{stats['commands_executed']:,}</td><td>{data['averages']['commands_per_day']}</td><td>{last_24h.get('commands', 0):,}</td><td>{peak_commands[0]:,} ({peak_commands[1]})</td></tr>
+          <tr><td>{LOCALE['metric_success_rate']}</td><td class="glow">{data['averages']['success_rate']}%</td><td>{round(data['averages']['success_rate'], 1)}%</td><td>{round(last_24h.get('successful_logins', 0) / max(1, last_24h.get('login_attempts', 1)) * 100, 1)}%</td><td>{peak_success_rate[0]}% ({peak_success_rate[1]})</td></tr>
+          <tr><td>{LOCALE['metric_days_active']}</td><td class="glow" colspan="4">{data['days_active']}</td></tr>
         </table>
       </div>
     </div>
@@ -2454,7 +2451,7 @@ def generate_html(data):
 
   <div class="grid full">
     <div class="panel">
-      <h2>\U0001f480 Successful Logins \u2014 What They Did</h2>
+      <h2>{LOCALE['successful_logins_detail']}</h2>
       <div class="terminal" style="max-height:400px; overflow-y:auto;">
         {terminal_content}
       </div>
@@ -2464,7 +2461,7 @@ def generate_html(data):
 </div>
 
 <div class="footer">
-  HONEYPOT DASHBOARD v1.0 // Data from Cowrie SSH Honeypot // {data['generated']}
+  {LOCALE['footer'].format(generated=data['generated'])}
 </div>
 
 <script>
@@ -2517,7 +2514,7 @@ def generate_html(data):
   }}
 
   function fmtDate(d) {{
-    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var months = {LOCALE['months_js']};
     return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
   }}
 
@@ -2612,15 +2609,15 @@ def generate_html(data):
       pulseMarkers.push({{ ring: ring, dot: dot, baseRadius: baseRadius, phase: phase }});
 
       var credsHtml = m.creds.length > 0
-        ? '<br><span class="popup-label">Creds tried:</span><br>' + m.creds.map(function(c) {{ return '&nbsp;&nbsp;' + c; }}).join('<br>')
+        ? '<br><span class="popup-label">{LOCALE["popup_creds_tried"]}</span><br>' + m.creds.map(function(c) {{ return '&nbsp;&nbsp;' + c; }}).join('<br>')
         : '';
 
       dot.bindPopup(
         '<span style="color:#ff4444;font-weight:bold;font-size:14px">' + (m.nickname || '?') + '</span><br>' +
         '<span class="popup-ip">' + m.ip + '</span><br>' +
-        '<span class="popup-label">Location:</span> ' + (m.city ? m.city + ', ' : '') + m.country + '<br>' +
-        '<span class="popup-label">ISP:</span> ' + m.isp + '<br>' +
-        '<span class="popup-label">Attempts:</span> <strong>' + weekCount + '</strong>' +
+        '<span class="popup-label">{LOCALE["popup_location"]}</span> ' + (m.city ? m.city + ', ' : '') + m.country + '<br>' +
+        '<span class="popup-label">{LOCALE["popup_isp"]}</span> ' + m.isp + '<br>' +
+        '<span class="popup-label">{LOCALE["popup_attempts"]}</span> <strong>' + weekCount + '</strong>' +
         credsHtml
       );
 
@@ -2656,7 +2653,7 @@ def generate_html(data):
     var startStr = dateStr(range.start);
     var endStr = dateStr(range.end);
     var container = document.getElementById('dailyBreakdown');
-    var html = '<table><tr><th>Date</th><th>Sessions</th><th class="hide-mobile">Login Attempts</th><th>Successful</th><th>Unique IPs</th><th class="hide-mobile">Commands</th><th class="hide-mobile">Top Attacker</th></tr>';
+    var html = '<table><tr><th>{LOCALE["th_date"]}</th><th>{LOCALE["th_sessions"]}</th><th class="hide-mobile">{LOCALE["th_login_attempts"]}</th><th>{LOCALE["th_successful"]}</th><th>{LOCALE["th_unique_ips"]}</th><th class="hide-mobile">{LOCALE["th_commands"]}</th><th class="hide-mobile">{LOCALE["th_top_attacker"]}</th></tr>';
     allDailyBreakdown.forEach(function(d) {{
       if (d.date >= startStr && d.date <= endStr) {{
         var attackerCell = d.top_attacker_ip
@@ -2721,7 +2718,7 @@ def generate_html(data):
     data: {{
       labels: {top_creds_labels},
       datasets: [{{
-        label: 'Attempts',
+        label: '{LOCALE["chart_label_attempts"]}',
         data: {top_creds_data},
         backgroundColor: 'rgba(0, 255, 65, 0.6)',
         borderColor: '#00ff41',
@@ -2753,7 +2750,7 @@ def generate_html(data):
     data: {{
       labels: {timeline_labels},
       datasets: [{{
-        label: 'Attempts',
+        label: '{LOCALE["chart_label_attempts"]}',
         data: {timeline_data},
         borderColor: '#00ff41',
         backgroundColor: 'rgba(0, 255, 65, 0.1)',
