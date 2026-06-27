@@ -1271,40 +1271,53 @@ def analyze_events(events, geo_cache):
     }
 
 
-def ollama_healthy():
-    """Quick check if Ollama is responding."""
+def llm_healthy():
+    """Quick check if LLM API is responding."""
     try:
-        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
-        resp = urllib.request.urlopen(req, timeout=2)
+        url = f"{LLM_API_BASE}/models"
+        req = urllib.request.Request(url, method="GET")
+        if LLM_API_KEY:
+            req.add_header("Authorization", f"Bearer {LLM_API_KEY}")
+        resp = urllib.request.urlopen(req, timeout=5)
         return resp.status == 200
     except Exception:
         return False
 
 
-_ollama_is_healthy = None
+_llm_is_healthy = None
 
-def _check_ollama_once():
-    global _ollama_is_healthy
-    if _ollama_is_healthy is None:
-        _ollama_is_healthy = ollama_healthy()
-        if not _ollama_is_healthy:
-            print("[!] Ollama not responding, skipping LLM descriptions this run")
-    return _ollama_is_healthy
+def _check_llm_once():
+    global _llm_is_healthy
+    if _llm_is_healthy is None:
+        _llm_is_healthy = llm_healthy()
+        if not _llm_is_healthy:
+            print(f"[!] LLM API not responding ({LLM_API_BASE}), skipping LLM descriptions this run")
+    return _llm_is_healthy
 
 
-def llm_generate(prompt, model="qwen3.5:9b", temperature=0.5, max_tokens=30):
-    """Call Ollama to generate text using raw mode. Falls back to empty string on failure."""
-    if not _check_ollama_once():
+def llm_generate(prompt, model=None, temperature=0.5, max_tokens=30):
+    """Call LLM via OpenAI-compatible /v1/chat/completions endpoint.
+    Falls back to empty string on failure."""
+    if not _check_llm_once():
         return ""
     try:
-        payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "think": False, "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": 512, "stop": ["\n"]}}).encode()
+        payload = json.dumps({
+            "model": model or LLM_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }).encode()
         req = urllib.request.Request(
-            f"{OLLAMA_URL}/api/generate",
+            f"{LLM_API_BASE}/chat/completions",
             data=payload,
             headers={"Content-Type": "application/json"}
         )
-        resp = urllib.request.urlopen(req, timeout=300)  # 5min for CPU inference
-        return json.loads(resp.read()).get("response", "").strip()
+        if LLM_API_KEY:
+            req.add_header("Authorization", f"Bearer {LLM_API_KEY}")
+        resp = urllib.request.urlopen(req, timeout=300)
+        data = json.loads(resp.read())
+        return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"[!] LLM generation failed: {e}")
         return ""

@@ -166,7 +166,7 @@ class TestEmptyCommandRegression:
 
     def test_empty_command_does_not_crash_narratives(self, mock_geo_cache, mocker):
         # No Ollama → the deterministic template branch (which held the bug).
-        mocker.patch('generate._check_ollama_once', return_value=False)
+        mocker.patch('generate._check_llm_once', return_value=False)
         generate._nickname_cache.clear()
         generate._nickname_counter.clear()
         lines = [

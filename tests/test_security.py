@@ -62,7 +62,7 @@ class TestXSSInNarratives:
     def test_story_with_xss_escaped(self, mock_geo_cache, mocker):
         """If LLM returns XSS in narrative, it must be escaped in HTML."""
         mocker.patch('generate.llm_generate', return_value='<script>alert("pwned")</script>')
-        mocker.patch('generate._check_ollama_once', return_value=True)
+        mocker.patch('generate._check_llm_once', return_value=True)
         lines = [
             _make_log_line("cowrie.session.connect", src_ip="10.0.0.1"),
             _make_log_line("cowrie.login.success", src_ip="10.0.0.1",

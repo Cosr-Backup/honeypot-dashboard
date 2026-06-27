@@ -14,7 +14,7 @@ class TestFullPipeline:
     def test_pipeline_produces_html(self, sample_log_lines, mock_geo_cache, mocker):
         """Full pipeline produces valid HTML output."""
         mocker.patch('generate.llm_generate', return_value='Automated scanner.')
-        mocker.patch('generate._check_ollama_once', return_value=False)
+        mocker.patch('generate._check_llm_once', return_value=False)
         mocker.patch('generate.load_cache', return_value={})
         mocker.patch('generate.save_cache')
 
@@ -39,7 +39,7 @@ class TestFullPipeline:
     def test_html_snapshot(self, sample_log_lines, mock_geo_cache, snapshot, mocker):
         """Snapshot test for HTML structure (catches silent regressions)."""
         mocker.patch('generate.llm_generate', return_value='Test narrative.')
-        mocker.patch('generate._check_ollama_once', return_value=False)
+        mocker.patch('generate._check_llm_once', return_value=False)
         mocker.patch('generate.load_cache', return_value={})
         mocker.patch('generate.save_cache')
 
