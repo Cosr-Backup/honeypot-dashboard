@@ -338,36 +338,47 @@ Any Ollama-compatible model works — smaller models are faster, larger ones pro
 better descriptions. If Ollama is unreachable, descriptions fall back to
 template/regex generation and the dashboard still renders.
 
-### LLM 后端（支持任何 OpenAI 兼容 API）
+### LLM 后端（支持三种模式）
+
+通过 `LLM_PROVIDER` 切换 LLM 后端：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `LLM_API_BASE` | 空（回退到 `OLLAMA_URL/v1`） | API 基础 URL |
-| `LLM_API_KEY` | 空 | API 密钥（Ollama 不需要） |
-| `LLM_MODEL` | `qwen3.5:9b` | 模型名称 |
+| `LLM_PROVIDER` | `ollama` | `ollama` / `openai` / `none`（禁用 LLM） |
 
-**使用 Ollama（默认）：** 无需额外配置，自动使用 `http://localhost:11434/v1`。
+**Ollama（默认）：**
 
-**使用 OpenAI：**
 ```yaml
-LLM_API_BASE: https://api.openai.com/v1
-LLM_API_KEY: sk-xxx
-LLM_MODEL: gpt-4o-mini
+LLM_PROVIDER: ollama
+OLLAMA_URL: http://localhost:11434
+OLLAMA_MODEL: qwen3.5:9b
 ```
 
-**使用 DeepSeek：**
+**OpenAI 兼容 API（OpenAI、DeepSeek、OpenRouter 等）：**
+
 ```yaml
-LLM_API_BASE: https://api.deepseek.com/v1
-LLM_API_KEY: sk-xxx
-LLM_MODEL: deepseek-chat
+LLM_PROVIDER: openai
+OPENAI_BASE_URL: https://api.openai.com/v1
+OPENAI_API_KEY: sk-xxx
+OPENAI_MODEL: gpt-4.1-mini
 ```
 
-**使用 vLLM / 其他兼容服务：**
+**DeepSeek：**
+
 ```yaml
-LLM_API_BASE: http://your-server:8000/v1
-LLM_API_KEY: ""
-LLM_MODEL: your-model-name
+LLM_PROVIDER: openai
+OPENAI_BASE_URL: https://api.deepseek.com/v1
+OPENAI_API_KEY: sk-xxx
+OPENAI_MODEL: deepseek-chat
 ```
+
+**禁用 LLM：**
+
+```yaml
+LLM_PROVIDER: none
+```
+
+LLM 不可用时自动降级为规则描述，不影响仪表盘生成。
 
 ## Companion: Discord Alert Bot
 
