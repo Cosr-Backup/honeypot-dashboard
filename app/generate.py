@@ -439,23 +439,30 @@ def build_profile_text(ip, attempt_count, ip_sessions, all_cmds, creds):
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("HONEYPOT_DATA_DIR", SCRIPT_DIR)
 LOG_PATH = os.environ.get("COWRIE_LOG_PATH", "/home/cowrie/cowrie/var/log/cowrie/cowrie.json")
-# 向后兼容：OLLAMA_URL 仅作为 LLM_API_BASE 的默认回退值。
-# 新部署应直接使用 LLM_API_BASE + LLM_API_KEY + LLM_MODEL。
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:9b")
 
-# LLM 配置 — 支持任何 OpenAI 兼容 API（OpenAI、DeepSeek、vLLM、Ollama 等）
-# LLM_API_BASE: API 基础 URL。默认使用 Ollama 本地地址（向后兼容）。
-#   示例: "https://api.openai.com/v1"、"https://api.deepseek.com/v1"、"http://localhost:11434/v1"
-LLM_API_BASE = os.environ.get("LLM_API_BASE", "").rstrip("/")
-if not LLM_API_BASE:
-    # 向后兼容：如果没有设置 LLM_API_BASE，使用 OLLAMA_URL + /v1
+# LLM_PROVIDER: "ollama"（默认）、"openai"（OpenAI 兼容 API）、"none"（禁用 LLM）
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
+
+# OpenAI 兼容 API 配置（仅 LLM_PROVIDER=openai 时生效）
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+
+# 运行时实际使用的 LLM 配置（由 LLM_PROVIDER 决定）
+if LLM_PROVIDER == "openai":
+    LLM_API_BASE = OPENAI_BASE_URL or "https://api.openai.com/v1"
+    LLM_API_KEY = OPENAI_API_KEY
+    LLM_MODEL = OPENAI_MODEL
+elif LLM_PROVIDER == "ollama":
     LLM_API_BASE = OLLAMA_URL + "/v1"
-
-# LLM_API_KEY: API 密钥。Ollama 不需要，OpenAI/DeepSeek 等需要。
-LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
-
-# LLM_MODEL: 模型名称。默认 "qwen3.5:9b"（Ollama 本地模型）。
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen3.5:9b")
+    LLM_API_KEY = ""
+    LLM_MODEL = OLLAMA_MODEL
+else:
+    LLM_API_BASE = ""
+    LLM_API_KEY = ""
+    LLM_MODEL = ""
 
 os.makedirs(DATA_DIR, exist_ok=True)
 CACHE_PATH = os.path.join(DATA_DIR, "geoip_cache.json")
@@ -1281,8 +1288,13 @@ def analyze_events(events, geo_cache):
 
 def llm_healthy():
     """Quick check if LLM API is responding."""
+    if LLM_PROVIDER == "none":
+        return False
     try:
-        url = f"{LLM_API_BASE}/models"
+        if LLM_PROVIDER == "ollama":
+            url = f"{OLLAMA_URL}/api/tags"
+        else:
+            url = f"{LLM_API_BASE}/models"
         req = urllib.request.Request(url, method="GET")
         if LLM_API_KEY:
             req.add_header("Authorization", f"Bearer {LLM_API_KEY}")
@@ -1297,35 +1309,61 @@ _llm_is_healthy = None
 def _check_llm_once():
     global _llm_is_healthy
     if _llm_is_healthy is None:
-        _llm_is_healthy = llm_healthy()
-        if not _llm_is_healthy:
-            print(f"[!] LLM API not responding ({LLM_API_BASE}), skipping LLM descriptions this run")
+        if LLM_PROVIDER == "none":
+            _llm_is_healthy = False
+            print("[*] LLM disabled (LLM_PROVIDER=none), skipping LLM descriptions")
+        else:
+            _llm_is_healthy = llm_healthy()
+            if not _llm_is_healthy:
+                print(f"[!] LLM API not responding (provider={LLM_PROVIDER}), skipping LLM descriptions this run")
     return _llm_is_healthy
 
 
 def llm_generate(prompt, model=None, temperature=0.5, max_tokens=30):
-    """Call LLM via OpenAI-compatible /v1/chat/completions endpoint.
-    Falls back to empty string on failure."""
+    """Call LLM via configured provider. Falls back to empty string on failure."""
     if not _check_llm_once():
         return ""
     try:
-        payload = json.dumps({
-            "model": model or LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }).encode()
-        req = urllib.request.Request(
-            f"{LLM_API_BASE}/chat/completions",
-            data=payload,
-            headers={"Content-Type": "application/json"}
-        )
-        if LLM_API_KEY:
-            req.add_header("Authorization", f"Bearer {LLM_API_KEY}")
-        resp = urllib.request.urlopen(req, timeout=300)
-        data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"].strip()
+        if LLM_PROVIDER == "ollama":
+            # Ollama 原生 API 格式
+            payload = json.dumps({
+                "model": model or OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "think": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": max_tokens,
+                    "num_ctx": 512,
+                    "stop": ["\n"],
+                },
+            }).encode()
+            req = urllib.request.Request(
+                f"{OLLAMA_URL}/api/generate",
+                data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            resp = urllib.request.urlopen(req, timeout=300)
+            return json.loads(resp.read()).get("response", "").strip()
+        else:
+            # OpenAI 兼容 API 格式
+            payload = json.dumps({
+                "model": model or LLM_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": False,
+            }).encode()
+            req = urllib.request.Request(
+                f"{LLM_API_BASE}/chat/completions",
+                data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            if LLM_API_KEY:
+                req.add_header("Authorization", f"Bearer {LLM_API_KEY}")
+            resp = urllib.request.urlopen(req, timeout=300)
+            data = json.loads(resp.read())
+            return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"[!] LLM generation failed: {e}")
         return ""
