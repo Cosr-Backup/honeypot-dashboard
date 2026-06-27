@@ -181,6 +181,52 @@ class TestChineseLocalization:
             os.unlink(tmp)
 
 
+class TestLanguageSwitching:
+    """LANG env var controls dashboard UI language."""
+
+    def test_default_locale_is_chinese(self):
+        """Default LANG=zh produces Chinese LOCALE."""
+        assert generate.LOCALE['lang'] == 'zh-CN'
+        assert '蜜罐' in generate.LOCALE['page_title']
+
+    def test_locale_has_all_required_keys(self):
+        """Both zh and en locales have the same set of keys."""
+        zh = generate._LOCALE_ZH
+        en = generate._LOCALE_EN
+        assert set(zh.keys()) == set(en.keys()), \
+            f"Key mismatch: zh-only={set(zh)-set(en)}, en-only={set(en)-set(zh)}"
+
+    def test_en_locale_values_are_english(self):
+        """EN locale contains English text, not Chinese."""
+        en = generate._LOCALE_EN
+        assert en['lang'] == 'en'
+        assert 'Honeypot' in en['page_title']
+        assert '蜜罐' not in en['page_title']
+
+    def test_html_english_text_with_en_locale(self, sample_log_lines, mock_geo_cache, mocker):
+        """With LOCALE=en, HTML contains English UI text."""
+        mocker.patch('generate.LOCALE', generate._LOCALE_EN)
+        mocker.patch('generate.llm_generate', return_value='Test description.')
+        mocker.patch('generate._check_llm_once', return_value=False)
+        mocker.patch('generate.load_cache', return_value={})
+        mocker.patch('generate.save_cache')
+        generate._nickname_cache.clear()
+        generate._nickname_counter.clear()
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            f.write('\n'.join(sample_log_lines))
+            tmp = f.name
+        try:
+            events = generate.parse_log(tmp)
+            data = generate.analyze_events(events, mock_geo_cache)
+            html = generate.generate_html(data)
+            assert 'lang="en"' in html
+            assert 'Honeypot Dashboard' in html
+            assert '蜜罐' not in html
+        finally:
+            os.unlink(tmp)
+
+
 # NOTE: TestCommandDeduplication (classify_commands_fast) was removed — that
 # function is dead code the live generate.py deleted (H2 fix). Narrative
 # generation is now covered by generate_attacker_narratives; the empty-command

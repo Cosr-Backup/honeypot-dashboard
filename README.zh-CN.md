@@ -273,6 +273,7 @@ docker compose logs -f --tail=50    # 查看首次 generate/analytics 运行
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `LANG` | `zh` | 仪表盘界面语言：`zh`（中文）/ `en`（英文） |
 | `COWRIE_LOG_PATH` | `/home/cowrie/cowrie/var/log/cowrie/cowrie.json` | Cowrie JSON 日志位置（容器内为 `/cowrie-logs/cowrie.json`） |
 | `HONEYPOT_DATA_DIR` | 脚本旁边 | 缓存、`analytics.json` 和 `dashboard.html` 的写入位置（容器内为 `/data`） |
 | `LLM_PROVIDER` | `ollama` | LLM 后端：`ollama` / `openai` / `none` |

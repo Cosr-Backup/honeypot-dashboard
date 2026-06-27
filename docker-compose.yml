@@ -28,6 +28,7 @@ services:
     environment:
       HONEYPOT_DATA_DIR: /data
       COWRIE_LOG_PATH: /cowrie-logs/cowrie.json
+      LANG: "zh"                    # zh | en — 仪表盘界面语言
       OLLAMA_URL: http://localhost:11434
       LLM_PROVIDER: "ollama"        # ollama | openai | none
       OLLAMA_MODEL: "qwen3.5:9b"    # Ollama 模型名

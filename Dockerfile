@@ -20,6 +20,7 @@ RUN groupadd -g 10001 app && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin a
 # file overrides SERVE_HOST / OLLAMA_URL for the host-network deployment.
 ENV PYTHONUNBUFFERED=1 \
     TZ=America/New_York \
+    LANG=zh \
     HONEYPOT_DATA_DIR=/data \
     COWRIE_LOG_PATH=/cowrie-logs/cowrie.json \
     OLLAMA_URL=http://host.docker.internal:11434 \

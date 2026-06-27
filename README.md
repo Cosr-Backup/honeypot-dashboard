@@ -280,6 +280,7 @@ All set in `docker-compose.yml`; the same variables work for a bare-metal run.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `LANG` | `zh` | Dashboard UI language: `zh` (Chinese) / `en` (English) |
 | `COWRIE_LOG_PATH` | `/home/cowrie/cowrie/var/log/cowrie/cowrie.json` | Cowrie JSON log location (`/cowrie-logs/cowrie.json` in-container) |
 | `HONEYPOT_DATA_DIR` | next to the scripts | Where caches, `analytics.json`, and `dashboard.html` are written (`/data` in-container) |
 | `LLM_PROVIDER` | `ollama` | LLM backend: `ollama` / `openai` / `none` |

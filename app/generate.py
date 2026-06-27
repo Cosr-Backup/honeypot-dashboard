@@ -36,22 +36,20 @@ from zoneinfo import ZoneInfo
 
 LOCAL_TZ = ZoneInfo("America/New_York")
 
-# ── 中文本地化字典 ──────────────────────────────────────────────
-LOCALE = {
+# ── 本地化字典 ──────────────────────────────────────────────────
+_LOCALE_ZH = {
     # 页面级
     "lang": "zh-CN",
     "page_title": "蜜罐攻击态势仪表盘",
     "header_title": "🍯 蜜罐攻击态势仪表盘",
     "header_subtitle": "COWRIE SSH 蜜罐 // 实时攻击情报 // 生成于: {generated}",
     "footer": "蜜罐攻击态势仪表盘 v1.0 // 数据来源: Cowrie SSH 蜜罐 // {generated}",
-
     # 统计栏
     "sessions_today": "今日会话",
     "login_attempts_today": "今日登录尝试",
     "successful_logins_today": "今日成功登录",
     "unique_ips_today": "今日独立 IP",
     "commands_today": "今日命令",
-
     # 面板标题
     "attack_origins": "🌐 攻击来源",
     "top_attackers": "🏆 攻击者排行",
@@ -62,13 +60,11 @@ LOCALE = {
     "daily_breakdown": "📊 每日明细",
     "all_time_stats": "📊 历史统计",
     "successful_logins_detail": "💀 成功登录 — 攻击者行为",
-
     # 表头 — 攻击者排行
     "th_attacker": "攻击者",
     "th_origin": "来源",
     "th_isp": "运营商",
     "th_attempts": "尝试次数",
-
     # 表头 — 每日明细
     "th_date": "日期",
     "th_sessions": "会话",
@@ -77,14 +73,12 @@ LOCALE = {
     "th_unique_ips": "独立 IP",
     "th_commands": "命令",
     "th_top_attacker": "主要攻击者",
-
     # 表头 — 历史统计
     "th_metric": "指标",
     "th_total": "总计",
     "th_avg_day": "日均",
     "th_last_24h": "近 24h",
     "th_peak_day": "峰值日",
-
     # 历史统计行标签
     "metric_sessions": "会话",
     "metric_login_attempts": "登录尝试",
@@ -93,16 +87,13 @@ LOCALE = {
     "metric_commands_executed": "执行命令",
     "metric_success_rate": "成功率",
     "metric_days_active": "活跃天数",
-
     # 地图弹窗
     "popup_creds_tried": "尝试凭证:",
     "popup_location": "位置:",
     "popup_isp": "运营商:",
     "popup_attempts": "尝试次数:",
-
     # 图表
     "chart_label_attempts": "尝试次数",
-
     # 动态/空状态
     "no_attackers": "暂无攻击者数据。",
     "no_successful_logins": "暂无成功登录记录。机器人仍在努力尝试中...",
@@ -111,15 +102,78 @@ LOCALE = {
     "login_attempt": "登录尝试",
     "command_prefix": "命令:",
     "file_prefix": "文件:",
-
     # 日期月份缩写（JavaScript 用，渲染时通过 json.dumps 转换）
     "months": ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"],
-
-    # 量词/单位（greatest_hits 卡片）
+    # 量词/单位
     "unit_attempts": " 次尝试",
     "unit_sessions": " 个会话",
     "unit_cmds": " 条命令",
 }
+
+_LOCALE_EN = {
+    "lang": "en",
+    "page_title": "Honeypot Dashboard",
+    "header_title": "🍯 Honeypot Dashboard",
+    "header_subtitle": "COWRIE SSH HONEYPOT // LIVE ATTACKER INTELLIGENCE // Generated: {generated}",
+    "footer": "Honeypot Dashboard v1.0 // Data from Cowrie SSH Honeypot // {generated}",
+    "sessions_today": "Sessions Today",
+    "login_attempts_today": "Login Attempts Today",
+    "successful_logins_today": "Successful Logins Today",
+    "unique_ips_today": "Unique IPs Today",
+    "commands_today": "Commands Today",
+    "attack_origins": "🌐 Attack Origins",
+    "top_attackers": "🏆 Top Attackers",
+    "recent_activity": "📡 Recent Activity",
+    "greatest_hits": "🎬 Greatest Hits",
+    "top_credentials": "🔑 Top Credentials",
+    "attack_timeline": "📈 Attack Timeline",
+    "daily_breakdown": "📊 Daily Breakdown",
+    "all_time_stats": "📊 All-Time Stats",
+    "successful_logins_detail": "💀 Successful Logins — What They Did",
+    "th_attacker": "Attacker",
+    "th_origin": "Origin",
+    "th_isp": "ISP",
+    "th_attempts": "Attempts",
+    "th_date": "Date",
+    "th_sessions": "Sessions",
+    "th_login_attempts": "Login Attempts",
+    "th_successful": "Successful",
+    "th_unique_ips": "Unique IPs",
+    "th_commands": "Commands",
+    "th_top_attacker": "Top Attacker",
+    "th_metric": "Metric",
+    "th_total": "Total",
+    "th_avg_day": "Avg / Day",
+    "th_last_24h": "Last 24h",
+    "th_peak_day": "Peak Day",
+    "metric_sessions": "Sessions",
+    "metric_login_attempts": "Login Attempts",
+    "metric_successful_logins": "Successful Logins",
+    "metric_unique_ips": "Unique IPs",
+    "metric_commands_executed": "Commands Executed",
+    "metric_success_rate": "Success Rate",
+    "metric_days_active": "Days Active",
+    "popup_creds_tried": "Creds tried:",
+    "popup_location": "Location:",
+    "popup_isp": "ISP:",
+    "popup_attempts": "Attempts:",
+    "chart_label_attempts": "Attempts",
+    "no_attackers": "No attackers to profile yet.",
+    "no_successful_logins": "No successful logins captured yet. The bots are still trying...",
+    "login_success": "✅ LOGIN SUCCESS",
+    "key_auth": "🔑 Key auth",
+    "login_attempt": "Login attempt",
+    "command_prefix": "Command:",
+    "file_prefix": "File:",
+    "months": ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
+    "unit_attempts": " attempts",
+    "unit_sessions": " sessions",
+    "unit_cmds": " cmds",
+}
+
+_LOCALES = {"zh": _LOCALE_ZH, "en": _LOCALE_EN}
+_LANG = os.environ.get("LANG", "zh").split("-")[0].lower()  # "zh-CN" → "zh", "en" → "en"
+LOCALE = _LOCALES.get(_LANG, _LOCALE_ZH)
 
 def strip_markdown(text):
     """Strip markdown formatting from LLM output before inserting into HTML."""
