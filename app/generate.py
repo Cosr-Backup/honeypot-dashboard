@@ -36,6 +36,95 @@ from zoneinfo import ZoneInfo
 
 LOCAL_TZ = ZoneInfo("America/New_York")
 
+# ── 中文本地化字典 ──────────────────────────────────────────────
+LOCALE = {
+    # 页面级
+    "lang": "zh-CN",
+    "page_title": "蜜罐攻击态势仪表盘",
+    "header_title": "🍯 蜜罐攻击态势仪表盘",
+    "header_subtitle": "COWRIE SSH 蜜罐 // 实时攻击情报 // 生成于: {generated}",
+    "footer": "蜜罐攻击态势仪表盘 v1.0 // 数据来源: Cowrie SSH 蜜罐 // {generated}",
+
+    # 统计栏
+    "sessions_today": "今日会话",
+    "login_attempts_today": "今日登录尝试",
+    "successful_logins_today": "今日成功登录",
+    "unique_ips_today": "今日独立 IP",
+    "commands_today": "今日命令",
+
+    # 面板标题
+    "attack_origins": "🌐 攻击来源",
+    "top_attackers": "🏆 攻击者排行",
+    "recent_activity": "📡 最近活动",
+    "greatest_hits": "🎬 精彩回顾",
+    "top_credentials": "🔑 高频凭证",
+    "attack_timeline": "📈 攻击时间线",
+    "daily_breakdown": "📊 每日明细",
+    "all_time_stats": "📊 历史统计",
+    "successful_logins_detail": "💀 成功登录 — 攻击者行为",
+
+    # 表头 — 攻击者排行
+    "th_attacker": "攻击者",
+    "th_origin": "来源",
+    "th_isp": "运营商",
+    "th_attempts": "尝试次数",
+
+    # 表头 — 每日明细
+    "th_date": "日期",
+    "th_sessions": "会话",
+    "th_login_attempts": "登录尝试",
+    "th_successful": "成功",
+    "th_unique_ips": "独立 IP",
+    "th_commands": "命令",
+    "th_top_attacker": "主要攻击者",
+
+    # 表头 — 历史统计
+    "th_metric": "指标",
+    "th_total": "总计",
+    "th_avg_day": "日均",
+    "th_last_24h": "近 24h",
+    "th_peak_day": "峰值日",
+
+    # 历史统计行标签
+    "metric_sessions": "会话",
+    "metric_login_attempts": "登录尝试",
+    "metric_successful_logins": "成功登录",
+    "metric_unique_ips": "独立 IP",
+    "metric_commands_executed": "执行命令",
+    "metric_success_rate": "成功率",
+    "metric_days_active": "活跃天数",
+
+    # 地图弹窗
+    "popup_creds_tried": "尝试凭证:",
+    "popup_location": "位置:",
+    "popup_isp": "运营商:",
+    "popup_attempts": "尝试次数:",
+
+    # 图表
+    "chart_label_attempts": "尝试次数",
+
+    # 动态/空状态
+    "no_attackers": "暂无攻击者数据。",
+    "no_successful_logins": "暂无成功登录记录。机器人仍在努力尝试中...",
+    "login_success": "✅ 登录成功",
+    "key_auth": "🔑 密钥认证",
+    "login_attempt": "登录尝试",
+    "command_prefix": "命令:",
+    "file_prefix": "文件:",
+
+    # serve.py 加载页
+    "loading_title": "仪表盘生成中...",
+    "loading_msg": "首次运行 LLM 生成需要几分钟，请稍后刷新。",
+
+    # 日期月份缩写（JavaScript 用）
+    "months_js": "['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']",
+
+    # 量词/单位（greatest_hits 卡片）
+    "unit_attempts": " 次尝试",
+    "unit_sessions": " 个会话",
+    "unit_cmds": " 条命令",
+}
+
 def strip_markdown(text):
     """Strip markdown formatting from LLM output before inserting into HTML."""
     if not text:
