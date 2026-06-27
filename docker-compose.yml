@@ -27,6 +27,9 @@ services:
       HONEYPOT_DATA_DIR: /data
       COWRIE_LOG_PATH: /cowrie-logs/cowrie.json
       OLLAMA_URL: http://localhost:11434
+      LLM_API_BASE: ""        # 留空则自动使用 OLLAMA_URL/v1
+      LLM_API_KEY: ""          # Ollama 不需要，OpenAI/DeepSeek 需要填写
+      LLM_MODEL: "qwen3.5:9b"  # 可改为任何兼容模型名
       SERVE_HOST: 127.0.0.1
       SERVE_PORT: "9999"
       REGEN_INTERVAL: "300"

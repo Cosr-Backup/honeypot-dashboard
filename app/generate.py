@@ -434,6 +434,21 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("HONEYPOT_DATA_DIR", SCRIPT_DIR)
 LOG_PATH = os.environ.get("COWRIE_LOG_PATH", "/home/cowrie/cowrie/var/log/cowrie/cowrie.json")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+
+# LLM 配置 — 支持任何 OpenAI 兼容 API（OpenAI、DeepSeek、vLLM、Ollama 等）
+# LLM_API_BASE: API 基础 URL。默认使用 Ollama 本地地址（向后兼容）。
+#   示例: "https://api.openai.com/v1"、"https://api.deepseek.com/v1"、"http://localhost:11434/v1"
+LLM_API_BASE = os.environ.get("LLM_API_BASE", "").rstrip("/")
+if not LLM_API_BASE:
+    # 向后兼容：如果没有设置 LLM_API_BASE，使用 OLLAMA_URL + /v1
+    LLM_API_BASE = OLLAMA_URL + "/v1"
+
+# LLM_API_KEY: API 密钥。Ollama 不需要，OpenAI/DeepSeek 等需要。
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
+
+# LLM_MODEL: 模型名称。默认 "qwen3.5:9b"（Ollama 本地模型）。
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen3.5:9b")
+
 os.makedirs(DATA_DIR, exist_ok=True)
 CACHE_PATH = os.path.join(DATA_DIR, "geoip_cache.json")
 OUTPUT_PATH = os.path.join(DATA_DIR, "dashboard.html")
