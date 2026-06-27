@@ -332,10 +332,42 @@ A few non-env settings live at the top of each script:
 | `RETENTION_DAYS` | `analytics.py` | `30` | Days to keep analytics data before pruning |
 
 ### LLM Model
+
 The LLM model is specified in `generate.py`'s `llm_generate()` function (`qwen3.5:9b`).
 Any Ollama-compatible model works — smaller models are faster, larger ones produce
 better descriptions. If Ollama is unreachable, descriptions fall back to
 template/regex generation and the dashboard still renders.
+
+### LLM 后端（支持任何 OpenAI 兼容 API）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LLM_API_BASE` | 空（回退到 `OLLAMA_URL/v1`） | API 基础 URL |
+| `LLM_API_KEY` | 空 | API 密钥（Ollama 不需要） |
+| `LLM_MODEL` | `qwen3.5:9b` | 模型名称 |
+
+**使用 Ollama（默认）：** 无需额外配置，自动使用 `http://localhost:11434/v1`。
+
+**使用 OpenAI：**
+```yaml
+LLM_API_BASE: https://api.openai.com/v1
+LLM_API_KEY: sk-xxx
+LLM_MODEL: gpt-4o-mini
+```
+
+**使用 DeepSeek：**
+```yaml
+LLM_API_BASE: https://api.deepseek.com/v1
+LLM_API_KEY: sk-xxx
+LLM_MODEL: deepseek-chat
+```
+
+**使用 vLLM / 其他兼容服务：**
+```yaml
+LLM_API_BASE: http://your-server:8000/v1
+LLM_API_KEY: ""
+LLM_MODEL: your-model-name
+```
 
 ## Companion: Discord Alert Bot
 

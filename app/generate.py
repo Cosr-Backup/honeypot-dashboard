@@ -433,6 +433,8 @@ def build_profile_text(ip, attempt_count, ip_sessions, all_cmds, creds):
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("HONEYPOT_DATA_DIR", SCRIPT_DIR)
 LOG_PATH = os.environ.get("COWRIE_LOG_PATH", "/home/cowrie/cowrie/var/log/cowrie/cowrie.json")
+# 向后兼容：OLLAMA_URL 仅作为 LLM_API_BASE 的默认回退值。
+# 新部署应直接使用 LLM_API_BASE + LLM_API_KEY + LLM_MODEL。
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 
 # LLM 配置 — 支持任何 OpenAI 兼容 API（OpenAI、DeepSeek、vLLM、Ollama 等）
