@@ -96,7 +96,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             except FileNotFoundError:
                 self.send_response(200)
                 self.send_header("Content-type", "text/html; charset=utf-8")
-                msg = b"<html><body style='background:#0a0a0a;color:#00ff41;font-family:monospace;padding:40px;text-align:center'><h1>Dashboard generating...</h1><p>First run with LLM takes a couple minutes. Refresh shortly.</p><meta http-equiv='refresh' content='15'></body></html>"
+                msg = "<html><body style='background:#0a0a0a;color:#00ff41;font-family:monospace;padding:40px;text-align:center'><h1>仪表盘生成中...</h1><p>首次运行 LLM 生成需要几分钟，请稍后刷新。</p><meta http-equiv='refresh' content='15'></body></html>".encode()
                 self.send_header("Content-Length", str(len(msg)))
                 self.end_headers()
                 self.wfile.write(msg)
